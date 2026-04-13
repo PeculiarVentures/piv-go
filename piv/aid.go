@@ -1,0 +1,8 @@
+package piv
+
+// PIV Application Identifier (AID) as defined in NIST SP 800-73.
+var pivAID = []byte{
+	0xA0, 0x00, 0x00, 0x03, 0x08, // RID: NIST
+	0x00, 0x00, 0x10, 0x00, // PIX: PIV Application
+	0x01, 0x00, // Version
+}
