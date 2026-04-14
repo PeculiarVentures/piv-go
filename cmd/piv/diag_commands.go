@@ -37,6 +37,7 @@ func (c *cli) newDiagCommand() *cobra.Command {
 
 	tlv := &cobra.Command{Use: "tlv", Short: "Decode BER-TLV payloads"}
 	var tlvInput string
+	var tlvHex string
 	tlvDecode := &cobra.Command{
 		Use:   "decode",
 		Short: "Decode BER-TLV from a file or stdin",
@@ -44,11 +45,12 @@ func (c *cli) newDiagCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
 				_ = global
-				return c.diag.TLVDecode(ctx, app.TLVDecodeRequest{InputPath: tlvInput})
+				return c.diag.TLVDecode(ctx, app.TLVDecodeRequest{InputPath: tlvInput, HexInput: tlvHex})
 			})
 		},
 	}
 	tlvDecode.Flags().StringVar(&tlvInput, "in", "-", "Read TLV input from a file path or stdin when set to -")
+	tlvDecode.Flags().StringVar(&tlvHex, "hex", "", "Read TLV input from a hexadecimal string")
 	tlv.AddCommand(tlvDecode)
 
 	apdu := &cobra.Command{Use: "apdu", Short: "Send raw APDU commands"}

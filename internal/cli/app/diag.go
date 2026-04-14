@@ -27,6 +27,7 @@ type ObjectReadRequest struct {
 // TLVDecodeRequest configures piv diag tlv decode.
 type TLVDecodeRequest struct {
 	InputPath string
+	HexInput  string
 }
 
 // APDUSendRequest configures piv diag apdu send.
@@ -154,15 +155,24 @@ func (s *DiagService) ObjectRead(ctx context.Context, request ObjectReadRequest)
 	return response, nil
 }
 
-// TLVDecode decodes BER-TLV input from a file or stdin.
+// TLVDecode decodes BER-TLV input from a file, stdin, or a hex string.
 func (s *DiagService) TLVDecode(_ context.Context, request TLVDecodeRequest) (Response, error) {
-	path := request.InputPath
-	if path == "" {
-		path = "-"
-	}
-	data, err := ReadInputFile(path, s.input)
-	if err != nil {
-		return Response{}, err
+	var data []byte
+	var err error
+	if request.HexInput != "" {
+		data, err = hex.DecodeString(strings.TrimSpace(strings.ReplaceAll(request.HexInput, " ", "")))
+		if err != nil {
+			return Response{}, UsageError(fmt.Sprintf("invalid hex input %q", request.HexInput), "provide a valid hexadecimal TLV string")
+		}
+	} else {
+		path := request.InputPath
+		if path == "" {
+			path = "-"
+		}
+		data, err = ReadInputFile(path, s.input)
+		if err != nil {
+			return Response{}, err
+		}
 	}
 	nodes, err := BuildTLVNodes(data)
 	if err != nil {
