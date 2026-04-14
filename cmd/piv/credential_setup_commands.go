@@ -195,7 +195,18 @@ func (c *cli) newManagementCommand() *cobra.Command {
 	rotate.Flags().BoolVarP(&rotateYes, "yes", "y", false, "Skip the destructive-operation confirmation")
 	rotate.Flags().BoolVar(&rotateDryRun, "dry-run", false, "Show the planned action without mutating the token")
 
-	command.AddCommand(verify, rotate)
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show management key status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				return c.info.MGMStatus(ctx, app.StatusRequest{Global: global})
+			})
+		},
+	}
+
+	command.AddCommand(status, verify, rotate)
 	return command
 }
 

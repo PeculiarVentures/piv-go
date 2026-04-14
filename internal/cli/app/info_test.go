@@ -65,3 +65,31 @@ func TestRenderInfo_ShowsChuid(t *testing.T) {
 		t.Fatalf("expected CHUID components in output, got %q", got)
 	}
 }
+
+func TestRenderInfo_ShowsMGMRetriesUnknown(t *testing.T) {
+	result := InfoResult{
+		Credentials: CredentialsView{
+			MGM: CredentialStatus{Supported: true, RetriesRemaining: adapters.UnknownRetries},
+		},
+	}
+	buf := bytes.Buffer{}
+	(&Formatter{}).renderInfo(&buf, TargetSummary{Reader: "SafeNet eToken Fusion", Adapter: "safenet"}, result)
+	got := buf.String()
+	if !strings.Contains(got, "MGM retries remaining: unknown") {
+		t.Fatalf("expected MGM unknown retries output, got %q", got)
+	}
+}
+
+func TestRenderInfo_ShowsMGMRetriesUnlimited(t *testing.T) {
+	result := InfoResult{
+		Credentials: CredentialsView{
+			MGM: CredentialStatus{Supported: true, RetriesRemaining: adapters.UnlimitedRetries},
+		},
+	}
+	buf := bytes.Buffer{}
+	(&Formatter{}).renderInfo(&buf, TargetSummary{Reader: "Yubico YubiKey OTP+FIDO+CCID", Adapter: "yubikey"}, result)
+	got := buf.String()
+	if !strings.Contains(got, "MGM retries remaining: unlimited") {
+		t.Fatalf("expected MGM unlimited retries output, got %q", got)
+	}
+}

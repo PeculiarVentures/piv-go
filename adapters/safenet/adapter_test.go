@@ -104,6 +104,26 @@ func TestSafeNetAdapterPINStatusFromTLV(t *testing.T) {
 	}
 }
 
+func TestSafeNetAdapterManagementKeyStatusFromTLV(t *testing.T) {
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xA4, nil)
+
+	inner := append(iso7816.EncodeTLV(0x9A, []byte{0x10}), iso7816.EncodeTLV(0x9B, []byte{0x05})...)
+	response := iso7816.EncodeTLV(0xE2, iso7816.EncodeTLV(0xA0, inner))
+	mock.SetSuccessResponse(0xCB, response)
+
+	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "SafeNet eToken Fusion"}
+	adpt := NewAdapter()
+
+	status, err := adapteradmin.ReadManagementKeyStatus(adapters.NewRuntime(session, adpt))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.MaxRetries != 16 || status.RetriesLeft != 5 {
+		t.Fatalf("wrong MGM status: %+v", status)
+	}
+}
+
 func TestDescribeSlotFallsBackToMirrorCertificate(t *testing.T) {
 	certificateDER := mustCreateSafeNetTestCertificate(t)
 	publicKeyObject := iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy))))

@@ -23,6 +23,9 @@ func TestReportCapabilitiesWithoutAdapterUsesDefaults(t *testing.T) {
 	if capabilityByID(report, adapters.CapabilityChangeManagementKey).Support != adapters.CapabilityUnsupported {
 		t.Fatal("change-management-key should be unsupported by default")
 	}
+	if capabilityByID(report, adapters.CapabilityManagementKeyStatus).Support != adapters.CapabilityUnsupported {
+		t.Fatal("management-key-status should be unsupported by default")
+	}
 	if capabilityByID(report, adapters.CapabilityInitializeToken).Support != adapters.CapabilityUnsupported {
 		t.Fatal("initialize-token should be unsupported by default")
 	}
@@ -43,6 +46,9 @@ func TestSafeNetCapabilitiesOverrideDefaults(t *testing.T) {
 	if capabilityByID(report, adapters.CapabilityChangeManagementKey).Support != adapters.CapabilityVendor {
 		t.Fatal("SafeNet management key change should be vendor-backed")
 	}
+	if capabilityByID(report, adapters.CapabilityManagementKeyStatus).Support != adapters.CapabilityVendor {
+		t.Fatal("SafeNet management key status should be vendor-backed")
+	}
 	if capabilityByID(report, adapters.CapabilityInitializeToken).Support != adapters.CapabilityVendor {
 		t.Fatal("SafeNet initialize-token should be vendor-backed")
 	}
@@ -59,6 +65,9 @@ func TestYubiKeyCapabilitiesOverrideDefaults(t *testing.T) {
 	}
 	if capabilityByID(report, adapters.CapabilityChangeManagementKey).Support != adapters.CapabilityVendor {
 		t.Fatal("YubiKey management key change should be vendor-backed")
+	}
+	if capabilityByID(report, adapters.CapabilityManagementKeyStatus).Support != adapters.CapabilityVendor {
+		t.Fatal("YubiKey management key status should be vendor-backed")
 	}
 	if capabilityByID(report, adapters.CapabilityResetToken).Support != adapters.CapabilityVendor {
 		t.Fatal("YubiKey reset-token should be vendor-backed")

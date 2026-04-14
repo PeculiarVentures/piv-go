@@ -364,6 +364,44 @@ func (s *InfoService) PUKStatus(ctx context.Context, request StatusRequest) (Res
 	return response, nil
 }
 
+func (s *InfoService) MGMStatus(ctx context.Context, request StatusRequest) (Response, error) {
+	target, err := s.targets.Resolve(ctx, request.Global)
+	if err != nil {
+		return Response{}, err
+	}
+	defer func() {
+		_ = target.Close()
+	}()
+
+	capabilityReport := adapters.ReportCapabilities(target.Runtime.Adapter)
+	for _, item := range capabilityReport.Items {
+		if item.ID == adapters.CapabilityManagementKeyStatus && item.Support == adapters.CapabilityUnsupported {
+			response := Response{
+				Command: "mgm-status",
+				Target:  target.Summary,
+				Result:  CredentialStatus{Supported: false, Note: unsupportedCapabilityNote(item.Notes)},
+			}
+			response.traceLines = target.TraceLines()
+			return response, nil
+		}
+	}
+	status, err := adaptersadmin.ReadManagementKeyStatus(target.Runtime)
+	if err != nil {
+		return Response{}, err
+	}
+	response := Response{
+		Command: "mgm-status",
+		Target:  target.Summary,
+		Result: CredentialStatus{
+			Supported:        true,
+			RetriesRemaining: status.RetriesLeft,
+			Blocked:          status.Blocked,
+		},
+	}
+	response.traceLines = target.TraceLines()
+	return response, nil
+}
+
 func (s *InfoService) readCredentialStatuses(runtime *adapters.Runtime, capabilityReport adapters.CapabilityReport, warnings *[]Warning) CredentialsView {
 	credentials := CredentialsView{}
 	if status, err := adaptersadmin.ReadPINStatus(runtime, piv.PINTypeCard); err == nil {
@@ -372,21 +410,39 @@ func (s *InfoService) readCredentialStatuses(runtime *adapters.Runtime, capabili
 		*warnings = append(*warnings, Warning{Code: "pin-status-failed", Message: err.Error()})
 	}
 
+	pukSupported := true
+	mgmSupported := true
 	for _, item := range capabilityReport.Items {
-		if item.ID != adapters.CapabilityPUKStatus {
-			continue
+		switch item.ID {
+		case adapters.CapabilityPUKStatus:
+			if item.Support == adapters.CapabilityUnsupported {
+				pukSupported = false
+				credentials.PUK = CredentialStatus{Supported: false, Note: unsupportedCapabilityNote(item.Notes)}
+			}
+		case adapters.CapabilityManagementKeyStatus:
+			if item.Support == adapters.CapabilityUnsupported {
+				mgmSupported = false
+				credentials.MGM = CredentialStatus{Supported: false, Note: unsupportedCapabilityNote(item.Notes)}
+			}
 		}
-		if item.Support == adapters.CapabilityUnsupported {
-			credentials.PUK = CredentialStatus{Supported: false, Note: unsupportedCapabilityNote(item.Notes)}
-			return credentials
+	}
+
+	if pukSupported {
+		if status, err := adaptersadmin.ReadPINStatus(runtime, piv.PINTypePUK); err == nil {
+			credentials.PUK = CredentialStatus{Supported: true, RetriesRemaining: status.RetriesLeft, Blocked: status.Blocked, Verified: status.Verified}
+		} else {
+			*warnings = append(*warnings, Warning{Code: "puk-status-failed", Message: err.Error()})
 		}
-		break
 	}
-	if status, err := adaptersadmin.ReadPINStatus(runtime, piv.PINTypePUK); err == nil {
-		credentials.PUK = CredentialStatus{Supported: true, RetriesRemaining: status.RetriesLeft, Blocked: status.Blocked, Verified: status.Verified}
-	} else {
-		*warnings = append(*warnings, Warning{Code: "puk-status-failed", Message: err.Error()})
+
+	if mgmSupported {
+		if status, err := adaptersadmin.ReadManagementKeyStatus(runtime); err == nil {
+			credentials.MGM = CredentialStatus{Supported: true, RetriesRemaining: status.RetriesLeft, Blocked: status.Blocked}
+		} else {
+			*warnings = append(*warnings, Warning{Code: "mgm-status-failed", Message: err.Error()})
+		}
 	}
+
 	return credentials
 }
 

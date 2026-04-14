@@ -35,6 +35,7 @@ const (
 	CapabilityChangePUK              CapabilityID = "change-puk"
 	CapabilityUnblockPIN             CapabilityID = "unblock-pin"
 	CapabilityChangeManagementKey    CapabilityID = "change-management-key"
+	CapabilityManagementKeyStatus    CapabilityID = "management-key-status"
 	CapabilityResetSlot              CapabilityID = "reset-slot"
 	CapabilityResetToken             CapabilityID = "reset-token"
 )
@@ -98,6 +99,13 @@ func supportForSlotInspection(adapter Adapter) CapabilitySupport {
 func supportForManagementKeyChange(adapter Adapter) CapabilitySupport {
 	if credentialAdapter, ok := adapter.(CredentialAdapter); ok {
 		_ = credentialAdapter
+		return CapabilityVendor
+	}
+	return CapabilityUnsupported
+}
+
+func supportForManagementKeyStatus(adapter Adapter) CapabilitySupport {
+	if _, ok := adapter.(ManagementKeyStatusAdapter); ok {
 		return CapabilityVendor
 	}
 	return CapabilityUnsupported

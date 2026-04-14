@@ -28,6 +28,25 @@ func readPINStatus(session *adapters.Session, adapter adapters.Adapter, pinType 
 	return session.Client.PINStatus(pinType)
 }
 
+// ReadManagementKeyStatus resolves token-specific management key status handling.
+func ReadManagementKeyStatus(runtime *adapters.Runtime) (adapters.ManagementKeyStatus, error) {
+	if err := requireRuntime(runtime); err != nil {
+		return adapters.ManagementKeyStatus{}, err
+	}
+	return readManagementKeyStatus(runtime.Session, runtime.Adapter)
+}
+
+func readManagementKeyStatus(session *adapters.Session, adapter adapters.Adapter) (adapters.ManagementKeyStatus, error) {
+	if err := requireSessionClient(session); err != nil {
+		return adapters.ManagementKeyStatus{}, err
+	}
+	if statusAdapter, ok := adapter.(adapters.ManagementKeyStatusAdapter); ok {
+		session.Observe(adapters.LogLevelDebug, adapter, "read-management-key-status", "using adapter-specific MGM status handling")
+		return statusAdapter.ManagementKeyStatus(session)
+	}
+	return adapters.ManagementKeyStatus{}, fmt.Errorf("adapters: management key status is not supported")
+}
+
 // ChangePIN resolves token-specific PIN rotation with a standard fallback.
 
 func ChangePIN(runtime *adapters.Runtime, oldPIN string, newPIN string) error {

@@ -46,6 +46,7 @@ func defaultCapabilityReport(adapter Adapter) CapabilityReport {
 	items := []Capability{
 		{ID: CapabilityVerifyPIN, Label: "Verify PIN", Support: CapabilityStandard},
 		{ID: CapabilityAuthenticateManagement, Label: "Authenticate Management Key", Support: CapabilityStandard},
+		{ID: CapabilityManagementKeyStatus, Label: "Management Key Status", Support: supportForManagementKeyStatus(adapter)},
 		{ID: CapabilityInitializeToken, Label: "Initialize Token", Support: supportForInitialization(adapter)},
 		{ID: CapabilityGenerateKey, Label: "Generate Key", Support: capabilitySupport(adapter, true, false, false)},
 		{ID: CapabilityDeleteKey, Label: "Delete Key", Support: capabilitySupport(adapter, false, true, false)},

@@ -33,6 +33,22 @@ func (a *Adapter) ChangeManagementKey(session *adapters.Session, newAlgorithm by
 	return nil
 }
 
+// ManagementKeyStatus reads the SafeNet MGM retry counter from the proprietary admin object.
+func (a *Adapter) ManagementKeyStatus(session *adapters.Session) (adapters.ManagementKeyStatus, error) {
+	if err := session.Client.Select(); err != nil {
+		return adapters.ManagementKeyStatus{}, fmt.Errorf("safenet: select PIV application: %w", err)
+	}
+	data, err := getMetadata(session.Client, 0xFF840B)
+	if err != nil {
+		return adapters.ManagementKeyStatus{}, fmt.Errorf("safenet: read management key status: %w", err)
+	}
+	status, err := parseSafeNetManagementKeyStatus(data)
+	if err != nil {
+		return adapters.ManagementKeyStatus{}, fmt.Errorf("safenet: parse management key status: %w", err)
+	}
+	return status, nil
+}
+
 func selectAdminApplet(client *piv.Client) error {
 	resp, err := client.Execute(&iso7816.Command{Cla: 0x01, Ins: 0xA4, P1: 0x04, P2: 0x00, Data: adminAID, Le: -1})
 	if err != nil {
@@ -120,6 +136,31 @@ func getMetadata(client *piv.Client, tag uint) ([]byte, error) {
 	}
 	return resp.Data, nil
 }
+
+func parseSafeNetManagementKeyStatus(data []byte) (adapters.ManagementKeyStatus, error) {
+	tlvs, err := iso7816.ParseAllTLV(data)
+	if err != nil {
+		return adapters.ManagementKeyStatus{}, err
+	}
+	status := adapters.ManagementKeyStatus{RetriesLeft: adapters.UnknownRetries, MaxRetries: adapters.UnknownRetries}
+	if maxTLV := findRecursiveTLV(tlvs, 0x9A); maxTLV != nil {
+		status.MaxRetries = int(bytesToInt(maxTLV.Value))
+	}
+	if remainingTLV := findRecursiveTLV(tlvs, 0x9B); remainingTLV != nil {
+		status.RetriesLeft = int(bytesToInt(remainingTLV.Value))
+		status.Blocked = status.RetriesLeft == 0
+	}
+	return status, nil
+}
+
+func bytesToInt(value []byte) uint64 {
+	var result uint64
+	for _, b := range value {
+		result = (result << 8) | uint64(b)
+	}
+	return result
+}
+
 func findRecursiveTLV(tlvs []*iso7816.TLV, tag uint) *iso7816.TLV {
 	for _, tlv := range tlvs {
 		if tlv.Tag == tag {

@@ -97,6 +97,7 @@ func (a *Adapter) Capabilities() adapters.CapabilityReport {
 		adapters.CapabilityReadTokenLabel:      {Support: adapters.CapabilityVendor, Notes: "reads SafeNet vendor label from object 0x5FFF12 after PIV select"},
 		adapters.CapabilityInspectSlots:        {Notes: "uses SafeNet mirror fallback for slot state"},
 		adapters.CapabilityPUKStatus:           {Support: adapters.CapabilityVendor, Notes: "reads SafeNet PUK retry status from vendor-specific TLV response"},
+		adapters.CapabilityManagementKeyStatus: {Support: adapters.CapabilityVendor, Notes: "reads SafeNet MGM retry state from vendor-specific object FF840B"},
 		adapters.CapabilityChangeManagementKey: {Notes: "uses SafeNet admin object FF840B"},
 		adapters.CapabilityResetSlot:           {Notes: "clears generation and mirror objects for a slot"},
 		adapters.CapabilityResetToken:          {Notes: "clears SafeNet vendor objects and restores the default management key"},

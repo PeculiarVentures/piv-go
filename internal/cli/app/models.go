@@ -111,6 +111,7 @@ type SlotView struct {
 type CredentialsView struct {
 	PIN CredentialStatus `json:"pin,omitempty"`
 	PUK CredentialStatus `json:"puk,omitempty"`
+	MGM CredentialStatus `json:"mgm,omitempty"`
 }
 
 // CredentialStatus describes one credential probe result.

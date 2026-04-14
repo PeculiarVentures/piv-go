@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/PeculiarVentures/piv-go/adapters"
 )
 
 // Formatter renders human and JSON output for all commands.
@@ -159,16 +161,11 @@ func (f *Formatter) renderInfo(writer io.Writer, target TargetSummary, result In
 		_, _ = fmt.Fprintln(writer, "Slots:")
 		f.renderSlotTable(writer, result.Slots)
 	}
-	if result.Credentials.PIN.Supported || result.Credentials.PUK.Supported || result.Credentials.PUK.Note != "" {
+	if result.Credentials.PIN.Supported || result.Credentials.PUK.Supported || result.Credentials.MGM.Supported || result.Credentials.PUK.Note != "" || result.Credentials.MGM.Note != "" {
 		_, _ = fmt.Fprintln(writer, "Credentials:")
-		if result.Credentials.PIN.Supported {
-			_, _ = fmt.Fprintf(writer, "  PIN retries remaining: %d\n", result.Credentials.PIN.RetriesRemaining)
-		}
-		if result.Credentials.PUK.Supported {
-			_, _ = fmt.Fprintf(writer, "  PUK retries remaining: %d\n", result.Credentials.PUK.RetriesRemaining)
-		} else if result.Credentials.PUK.Note != "" {
-			_, _ = fmt.Fprintf(writer, "  PUK: %s\n", result.Credentials.PUK.Note)
-		}
+		f.renderCredentialStatus(writer, "pin-status", result.Credentials.PIN)
+		f.renderCredentialStatus(writer, "puk-status", result.Credentials.PUK)
+		f.renderCredentialStatus(writer, "mgm-status", result.Credentials.MGM)
 	}
 	for _, note := range result.Notes {
 		_, _ = fmt.Fprintf(writer, "Note: %s\n", note)
@@ -202,11 +199,13 @@ func (f *Formatter) renderVerification(writer io.Writer, result VerificationResu
 
 func (f *Formatter) renderCredentialStatus(writer io.Writer, command string, status CredentialStatus) {
 	name := "Credential"
-	if strings.Contains(command, "pin") {
+	switch {
+	case strings.Contains(command, "pin"):
 		name = "PIN"
-	}
-	if strings.Contains(command, "puk") {
+	case strings.Contains(command, "puk"):
 		name = "PUK"
+	case strings.Contains(command, "mgm"):
+		name = "MGM"
 	}
 	if !status.Supported {
 		_, _ = fmt.Fprintf(writer, "%s status: %s\n", name, status.Note)
@@ -216,7 +215,14 @@ func (f *Formatter) renderCredentialStatus(writer io.Writer, command string, sta
 		_, _ = fmt.Fprintf(writer, "%s is blocked\n", name)
 		return
 	}
-	_, _ = fmt.Fprintf(writer, "%s retries remaining: %d\n", name, status.RetriesRemaining)
+	switch status.RetriesRemaining {
+	case adapters.UnlimitedRetries:
+		_, _ = fmt.Fprintf(writer, "%s retries remaining: unlimited\n", name)
+	case adapters.UnknownRetries:
+		_, _ = fmt.Fprintf(writer, "%s retries remaining: unknown\n", name)
+	default:
+		_, _ = fmt.Fprintf(writer, "%s retries remaining: %d\n", name, status.RetriesRemaining)
+	}
 }
 
 func (f *Formatter) renderDoctor(writer io.Writer, result DoctorResult) {

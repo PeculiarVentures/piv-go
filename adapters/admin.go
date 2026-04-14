@@ -9,10 +9,32 @@ import (
 // PINStatus aliases the standard PIV PIN status model used by adapter helpers.
 type PINStatus = piv.PINStatus
 
+const (
+	// UnknownRetries represents an unavailable retry counter value.
+	UnknownRetries = -1
+	// UnlimitedRetries represents a retry counter that is effectively unlimited.
+	UnlimitedRetries = -2
+)
+
+// ManagementKeyStatus describes the observed state of a management key retry counter.
+// When a provider cannot determine retries, it should set RetriesLeft and MaxRetries
+// to UnknownRetries. If retries are effectively unlimited, use UnlimitedRetries.
+type ManagementKeyStatus struct {
+	RetriesLeft int
+	MaxRetries  int
+	Blocked     bool
+}
+
 // PINAdapter exposes token-specific status handling for card PIN references.
 type PINAdapter interface {
 	// PINStatus reports the current state of the specified PIN reference.
 	PINStatus(session *Session, pinType piv.PINType) (PINStatus, error)
+}
+
+// ManagementKeyStatusAdapter exposes token-specific MGM status handling.
+type ManagementKeyStatusAdapter interface {
+	// ManagementKeyStatus reports the current state of the management key retry counter.
+	ManagementKeyStatus(session *Session) (ManagementKeyStatus, error)
 }
 
 // CredentialAdapter exposes administrative credential rotation flows.

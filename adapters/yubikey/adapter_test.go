@@ -120,6 +120,22 @@ func TestYubiKeyAdapterManagementKeyAlgorithmUsesMetadata(t *testing.T) {
 	}
 }
 
+func TestYubiKeyAdapterManagementKeyStatusReturnsUnlimitedRetries(t *testing.T) {
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xF7, encodeManagementMetadataTLV(piv.AlgAES192, true, 0x01))
+
+	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}
+	adpt := NewAdapter()
+
+	status, err := adapteradmin.ReadManagementKeyStatus(adapters.NewRuntime(session, adpt))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.RetriesLeft != adapters.UnlimitedRetries || status.MaxRetries != adapters.UnlimitedRetries {
+		t.Fatalf("expected unlimited retries, got %+v", status)
+	}
+}
+
 func TestYubiKeyAdapterDescribeSlotUsesMetadata(t *testing.T) {
 	certificateDER := mustCreateYubiKeyTestCertificate(t)
 	certificateObject := iso7816.EncodeTLV(0x53, append(append(iso7816.EncodeTLV(0x70, certificateDER), iso7816.EncodeTLV(0x71, []byte{0x00})...), iso7816.EncodeTLV(0xFE, nil)...))

@@ -83,6 +83,7 @@ func (a *Adapter) Capabilities() adapters.CapabilityReport {
 		adapters.CapabilityDeleteKey:           {Notes: "uses YubiKey MOVE KEY delete operation on firmware 5.7+"},
 		adapters.CapabilityInspectSlots:        {Notes: "uses YubiKey slot metadata to detect keys without certificates"},
 		adapters.CapabilityPINStatus:           {Support: adapters.CapabilityVendor, Notes: "prefers YubiKey metadata when available"},
+		adapters.CapabilityManagementKeyStatus: {Support: adapters.CapabilityVendor, Notes: "reads YubiKey MGM metadata; retry counters are unlimited"},
 		adapters.CapabilityPUKStatus:           {Support: adapters.CapabilityVendor, Notes: "falls back when empty VERIFY returns 6A88"},
 		adapters.CapabilityReadSerialNumber:    {Support: adapters.CapabilityVendor, Notes: "uses YubiKey GET SERIAL vendor command"},
 		adapters.CapabilityReadTokenLabel:      {Support: adapters.CapabilityVendor, Notes: "uses YubiKey serial to generate token label"},
