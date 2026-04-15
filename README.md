@@ -129,6 +129,33 @@ func main() {
 }
 ```
 
+When building signing flows, prefer resolving key metadata and deriving the
+authorization policy before calling `Sign(...)`. This keeps `VERIFY PIN`
+handling explicit at the application layer. The following fragment assumes you
+already resolved an adapter runtime, prepared the digest, and obtained the PIN
+value from your own application logic:
+
+```go
+metadata, err := adapters.ResolveKeyMetadata(runtime, piv.SlotSignature)
+if err != nil {
+    log.Fatal(err)
+}
+
+policy := adapters.DeriveSignAuthorization(metadata)
+if policy.RequiresPIN() || !policy.IsKnown() {
+    if err := runtime.Session.Client.VerifyPIN(pin); err != nil {
+        log.Fatal(err)
+    }
+}
+
+signature, err := runtime.Session.Client.Sign(piv.AlgECCP256, piv.SlotSignature, digest)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("signature length: %d\n", len(signature))
+```
+
 ## Security and operational caveats
 
 - Real hardware operations can be destructive. Review `setup`, `mgm`, `key delete`, `key generate`, and `cert delete` commands before using them on a live token.

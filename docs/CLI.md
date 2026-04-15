@@ -61,6 +61,13 @@ piv mgm rotate --reader "YubiKey 5C NFC" --dry-run
 piv setup reset --reader "YubiKey 5C NFC" --dry-run
 ```
 
+For `piv key sign`, the CLI resolves best-effort key metadata before deciding
+whether to call `VERIFY PIN`.
+
+- If the slot policy is known to require PIN verification, the CLI performs `VERIFY` before signing.
+- If the slot policy is known to allow signing without PIN, the CLI skips the extra `VERIFY` unless you explicitly supply a PIN source.
+- If the policy is unknown, the CLI keeps the conservative behavior and still requires `VERIFY`.
+
 Run expert diagnostics:
 
 ```sh
