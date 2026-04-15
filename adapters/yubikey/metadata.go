@@ -161,13 +161,15 @@ func readSlotMetadata(client *piv.Client, slot piv.Slot) (yubiKeySlotMetadata, e
 	algorithm := values[yubiKeyMetadataTagAlgorithm]
 	policy := values[yubiKeyMetadataTagPolicy]
 	publicKeyEncoded := values[yubiKeyMetadataTagPublicKey]
-	if len(algorithm) == 0 || len(policy) < 2 || len(publicKeyEncoded) == 0 {
+	if len(algorithm) == 0 || len(policy) < 2 {
 		return yubiKeySlotMetadata{}, fmt.Errorf("yubikey: incomplete slot metadata")
 	}
-
-	publicKey, err := piv.ParsePublicKeyObject(iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, publicKeyEncoded)))
-	if err != nil {
-		return yubiKeySlotMetadata{}, fmt.Errorf("yubikey: parse slot public key: %w", err)
+	var publicKey any
+	if len(publicKeyEncoded) > 0 {
+		publicKey, err = piv.ParsePublicKeyObject(iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, publicKeyEncoded)))
+		if err != nil {
+			return yubiKeySlotMetadata{}, fmt.Errorf("yubikey: parse slot public key: %w", err)
+		}
 	}
 
 	return yubiKeySlotMetadata{

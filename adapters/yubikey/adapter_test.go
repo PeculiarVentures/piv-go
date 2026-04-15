@@ -158,6 +158,66 @@ func TestYubiKeyAdapterDescribeSlotUsesMetadata(t *testing.T) {
 	}
 }
 
+func TestYubiKeyAdapterKeyMetadataUsesSlotMetadata(t *testing.T) {
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLVWithPolicies(piv.AlgECCP256, 0x02, 0x03, false, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)))
+
+	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}
+	metadata, err := NewAdapter().KeyMetadata(session, piv.SlotSignature)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if metadata.Source != adapters.ResolutionSourceVendorMetadata {
+		t.Fatalf("unexpected source: %q", metadata.Source)
+	}
+	if metadata.Algorithm != adapters.KeyAlgorithmECCP256 {
+		t.Fatalf("unexpected algorithm: %q", metadata.Algorithm)
+	}
+	if metadata.PINPolicy != adapters.PINPolicyOnce {
+		t.Fatalf("unexpected PIN policy: %q", metadata.PINPolicy)
+	}
+	if metadata.TouchPolicy != adapters.TouchPolicyCached {
+		t.Fatalf("unexpected touch policy: %q", metadata.TouchPolicy)
+	}
+	if got := metadata.VendorFields["yubikey/pin-policy-raw"]; len(got) != 1 || got[0] != 0x02 {
+		t.Fatalf("unexpected raw PIN policy: %X", got)
+	}
+}
+
+func TestYubiKeyAdapterKeyMetadataMapsNeverPINPolicy(t *testing.T) {
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLVWithPolicies(piv.AlgECCP256, 0x01, 0x01, false, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)))
+
+	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}
+	metadata, err := NewAdapter().KeyMetadata(session, piv.SlotCardAuth)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if metadata.PINPolicy != adapters.PINPolicyNever {
+		t.Fatalf("unexpected PIN policy: %q", metadata.PINPolicy)
+	}
+	if metadata.TouchPolicy != adapters.TouchPolicyNever {
+		t.Fatalf("unexpected touch policy: %q", metadata.TouchPolicy)
+	}
+}
+
+func TestYubiKeyAdapterKeyMetadataFallsBackWhenMetadataUnavailable(t *testing.T) {
+	mock := emulator.NewCard()
+	mock.SetResponse(0xF7, nil, uint16(iso7816.SwInsNotSupported))
+
+	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}
+	metadata, err := NewAdapter().KeyMetadata(session, piv.SlotSignature)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if metadata.Source != adapters.ResolutionSourceFallback {
+		t.Fatalf("unexpected source: %q", metadata.Source)
+	}
+	if metadata.PINPolicy != adapters.PINPolicyUnknown {
+		t.Fatalf("unexpected PIN policy: %q", metadata.PINPolicy)
+	}
+}
+
 func TestYubiKeyAdapterDeleteKeyUsesMoveKey(t *testing.T) {
 	challenge := []byte{0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF}
 	challengeResp := iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x81, challenge))
@@ -334,14 +394,20 @@ func encodeManagementMetadataTLV(algorithm byte, defaultValue bool, touchPolicy 
 }
 
 func encodeSlotMetadataTLV(algorithm byte, generated bool, publicKey []byte) []byte {
+	return encodeSlotMetadataTLVWithPolicies(algorithm, 0x02, 0x01, generated, publicKey)
+}
+
+func encodeSlotMetadataTLVWithPolicies(algorithm byte, pinPolicy byte, touchPolicy byte, generated bool, publicKey []byte) []byte {
 	origin := byte(0x02)
 	if generated {
 		origin = yubiKeyOriginGenerated
 	}
 	data := iso7816.EncodeTLV(yubiKeyMetadataTagAlgorithm, []byte{algorithm})
-	data = append(data, iso7816.EncodeTLV(yubiKeyMetadataTagPolicy, []byte{0x02, 0x01})...)
+	data = append(data, iso7816.EncodeTLV(yubiKeyMetadataTagPolicy, []byte{pinPolicy, touchPolicy})...)
 	data = append(data, iso7816.EncodeTLV(yubiKeyMetadataTagOrigin, []byte{origin})...)
-	data = append(data, iso7816.EncodeTLV(yubiKeyMetadataTagPublicKey, iso7816.EncodeTLV(0x86, publicKey))...)
+	if len(publicKey) > 0 {
+		data = append(data, iso7816.EncodeTLV(yubiKeyMetadataTagPublicKey, iso7816.EncodeTLV(0x86, publicKey))...)
+	}
 	return data
 }
 
