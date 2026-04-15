@@ -91,7 +91,7 @@ func TestSafeNetAdapterPINStatusFromTLV(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if status.RetriesLeft != 3 {
+	if status.RetriesLeft != 5 {
 		t.Fatalf("wrong PUK retries: %+v", status)
 	}
 
@@ -99,7 +99,7 @@ func TestSafeNetAdapterPINStatusFromTLV(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if status.RetriesLeft != 5 {
+	if status.RetriesLeft != 3 {
 		t.Fatalf("wrong PIN retries: %+v", status)
 	}
 }

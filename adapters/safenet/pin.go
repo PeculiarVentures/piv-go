@@ -57,9 +57,9 @@ func (a *Adapter) safeNetPINStatusFromQuery(client *piv.Client, pinType piv.PINT
 		return adapters.PINStatus{}, false, err
 	}
 
-	tag := uint(0x9A)
+	tag := uint(0x9B)
 	if pinType == piv.PINTypePUK {
-		tag = 0x9B
+		tag = 0x9A
 	}
 
 	retries, ok := findRecursiveTLVValue(tlvs, tag)
