@@ -162,6 +162,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			usePIN := secretSourceUsed(signPINEnv, "PIV_PIN", signPINStdin)
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
 				return c.mutations.KeySign(ctx, app.SignRequest{
 					Global:    global,
@@ -171,6 +172,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 					Encoding:  signEncoding,
 					Out:       signOut,
 					PIN:       secretRequest("PIN", "Enter PIN: ", signPINEnv, "PIV_PIN", signPINStdin),
+					UsePIN:    usePIN,
 				})
 			})
 		},

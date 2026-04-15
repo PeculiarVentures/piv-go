@@ -50,6 +50,7 @@ type SignRequest struct {
 	Encoding  string
 	Out       string
 	PIN       SecretRequest
+	UsePIN    bool
 }
 
 // ChallengeRequest configures piv key challenge.
@@ -325,13 +326,11 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 	}
 	defer func() { _ = target.Close() }()
 
-	pin, err := resolver.ResolveString(request.PIN)
+	metadata, err := adapters.ResolveKeyMetadata(target.Runtime, request.Slot)
 	if err != nil {
 		return Response{}, err
 	}
-	if err := target.Session.Client.VerifyPIN(pin); err != nil {
-		return Response{}, err
-	}
+	policy := adapters.DeriveSignAuthorization(metadata)
 	publicKey, err := readPublicKey(target.Runtime, request.Slot)
 	if err != nil {
 		return Response{}, err
@@ -339,6 +338,15 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 	algorithm, _, err := InferPublicKeyAlgorithm(publicKey)
 	if err != nil {
 		return Response{}, err
+	}
+	if shouldPromptPINForSign(policy, request.UsePIN) {
+		pin, resolveErr := resolver.ResolveString(request.PIN)
+		if resolveErr != nil {
+			return Response{}, resolveErr
+		}
+		if err := target.Session.Client.VerifyPIN(pin); err != nil {
+			return Response{}, err
+		}
 	}
 	signature, err := target.Session.Client.Sign(algorithm, request.Slot, payload)
 	if err != nil {
@@ -361,6 +369,14 @@ func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeReq
 	defer func() { _ = target.Close() }()
 
 	if request.UsePIN {
+		publicKey, err := readPublicKey(target.Runtime, request.Slot)
+		if err != nil {
+			return Response{}, err
+		}
+		algorithm, _, err := InferPublicKeyAlgorithm(publicKey)
+		if err != nil {
+			return Response{}, err
+		}
 		pin, resolveErr := resolver.ResolveString(request.PIN)
 		if resolveErr != nil {
 			return Response{}, resolveErr
@@ -368,6 +384,11 @@ func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeReq
 		if err := target.Session.Client.VerifyPIN(pin); err != nil {
 			return Response{}, err
 		}
+		responseData, err := target.Session.Client.Authenticate(algorithm, request.Slot, challenge)
+		if err != nil {
+			return Response{}, err
+		}
+		return s.binaryArtifactResponse(target, "key-challenge", "challenge-response", request.Encoding, request.Out, responseData, request.Global.JSON)
 	}
 	publicKey, err := readPublicKey(target.Runtime, request.Slot)
 	if err != nil {
