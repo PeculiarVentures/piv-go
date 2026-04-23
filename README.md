@@ -129,13 +129,11 @@ func main() {
 }
 ```
 
-When building signing flows, prefer resolving key metadata and deriving the
-authorization policy before calling `Sign(...)`. This keeps `VERIFY PIN`
-handling explicit at the application layer. The following fragment assumes you
-already resolved an adapter runtime, prepared the digest, and obtained the PIN
-value from your own application logic:
+When building signing flows, prefer resolving key metadata and deriving the authorization policy before calling `Sign(...)`. This keeps `VERIFY PIN` handling explicit at the application layer. The following fragment assumes you already imported `github.com/PeculiarVentures/piv-go/adapters`, resolved an
+adapter runtime, prepared the digest, and obtained the PIN value from your own application logic:
 
 ```go
+// Example fragment: assumes runtime, digest, and pin are already available.
 metadata, err := adapters.ResolveKeyMetadata(runtime, piv.SlotSignature)
 if err != nil {
     log.Fatal(err)
@@ -155,6 +153,9 @@ if err != nil {
 
 fmt.Printf("signature length: %d\n", len(signature))
 ```
+
+In a complete application, resolve `runtime` through the adapter layer after connecting to the card, compute `digest` from the message you want to sign, and source `pin` from your own credential-handling path rather than from a command
+line argument.
 
 ## Security and operational caveats
 
