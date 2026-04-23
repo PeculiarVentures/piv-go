@@ -2,54 +2,78 @@
 
 ## Overview
 
-Go module implementing the PIV (Personal Identity Verification) protocol over PC/SC smart card transport.
+`piv-go` is a layered Go module and CLI for working with PIV smart cards over
+PC/SC transport.
 
-- Repository: `github.com/PeculiarVentures/piv-go`
+- Module: `github.com/PeculiarVentures/piv-go`
 - PC/SC binding: `github.com/ebfe/scard`
 - CLI framework: `github.com/spf13/cobra`
 
 ## Architecture
 
-```
-Application Layer → PIV Client API → PIV Core → ISO 7816 (APDU + TLV) → PC/SC Transport → Smart Card
-```
-
-Packages:
-
-- `pcsc/` — PC/SC transport wrapping `scard`, all direct scard calls isolated here
-- `iso7816/` — APDU encoding/decoding, status words, BER-TLV parsing
-- `piv/` — PIV protocol commands (SELECT, GET DATA, VERIFY PIN, GENERAL AUTHENTICATE, etc.)
-- `adapters/` — Vendor-specific adapters and higher-level token operations (YubiKey, SafeNet)
-- `internal/` — Shared internal utilities
-- `cmd/piv/` — CLI utility using cobra
-
-## Code Style
-
-- Go standard formatting (`gofmt`)
-- Exported types and functions must have doc comments
-- Errors should be wrapped with context using `fmt.Errorf` or custom error types
-- Keep packages focused: upper layers must not import `scard` directly
-- Each package must have a `doc.go` file with a package-level doc comment describing its purpose
-
-## Build and Test
-
-```sh
-go build ./...
-go test ./...
-go vet ./...
+```text
+Application Layer -> PIV Client API -> PIV Core -> ISO 7816 -> PC/SC Transport -> Smart Card
 ```
 
-## Conventions
+Primary package responsibilities:
 
-- Git commits follow Conventional Commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `refactor:`, `ci:`
-- Commit messages in English
-- Map SW1/SW2 status words to Go errors in `iso7816` package
-- All vendor-specific behavior goes in `vendor/` adapters
-- CLI must be thin — business logic lives in library packages
+- `pcsc/` owns all direct interaction with `scard`
+- `iso7816/` owns APDU encoding, responses, status words, and TLV parsing
+- `piv/` owns protocol commands and card-facing PIV operations
+- `adapters/` owns vendor-aware behavior and higher-level token workflows
+- `emulator/` owns emulator-backed behavior used by tests and diagnostics
+- `cmd/piv/` owns the CLI command surface
+- `internal/cli/app/` owns CLI orchestration, output formatting, config, and mutation planning
 
-## Emulator and agent guidance
+## Always-On Rules
 
-- Vendor-specific emulator implementations should be clearly identifiable by filename.
-- Prefer naming emulator-only files with a suffix like `*_emulator.go`.
-- Keep emulator helpers separate from production adapter code when possible.
-- When working with emulator-related tasks, locate dedicated emulator files first and avoid mixing emulator logic into main adapter code.
+- Keep the layer boundaries intact. Do not import `scard` outside `pcsc/`.
+- Keep vendor-specific logic in `adapters/` packages, not in `piv/`, `iso7816/`,
+  or the CLI command handlers.
+- Keep the CLI thin. Reusable business logic belongs in library packages or
+  `internal/cli/app/`.
+- Prefer existing helper types, result models, and error mapping patterns over
+  introducing a new command-local style.
+- Use Go standard formatting and keep exported API changes documented.
+
+## Safety and Operational Guardrails
+
+- Assume real token operations can be destructive.
+- For destructive flows such as `setup`, `mgm rotate`, `key generate`,
+  `key delete`, `cert import`, `cert delete`, and reset operations, preserve the
+  current preflight and confirmation model.
+- Do not remove or weaken `--dry-run`, `--yes`, `--non-interactive`, or similar
+  safety behavior without an explicit request.
+- Treat trace output and credential material as sensitive. Keep secrets out of
+  normal command output, examples, and tests unless a test is explicitly about
+  secret handling.
+
+## Testing and Validation
+
+- Minimum validation for code changes is `go test ./...`.
+- When changing package APIs or shared behavior, also run `go build ./...` and
+  `go vet ./...`.
+- Prefer emulator-backed tests and existing fake context helpers before
+  introducing hardware-dependent tests.
+- When changing CLI JSON output, keep stdout reserved for JSON and send
+  warnings, prompts, and trace output to stderr.
+
+## Git Workflow
+
+- Keep commits focused on one logical change when possible.
+- Before committing, review the diff and avoid staging unrelated files.
+- Use English commit messages.
+- Prefer Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`,
+  `test:`, `refactor:`, `chore:`, and `ci:` when they match the change.
+- Do not create a commit automatically unless the user asked for a commit or the
+  task explicitly includes producing one.
+
+## Repository-Specific Notes for Agents
+
+- SafeNet and YubiKey support lives under `adapters/safenet/` and
+  `adapters/yubikey/`.
+- Built-in adapter registration lives under `adapters/all/`.
+- Emulator-specific implementations should remain easy to identify, typically
+  with names such as `*_emulator.go`.
+- The emulator is useful for tests and smoke validation, but it does not imply
+  exact parity with every real token or firmware.
