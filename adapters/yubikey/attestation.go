@@ -52,12 +52,16 @@ func (a *Adapter) AttestKey(session *adapters.Session, slot piv.Slot) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("yubikey: read firmware version for attestation: %w", err)
 	}
-	supported, err := attestationVersionSupported(version)
-	if err != nil {
-		return nil, fmt.Errorf("yubikey: parse firmware version %q for attestation: %w", version, err)
-	}
-	if !supported {
-		return nil, fmt.Errorf("yubikey: firmware %s is not supported for key attestation, requires %s or later", version, attestationMinVersion)
+	if isPreviewPlaceholderVersion(version) {
+		session.Observe(adapters.LogLevelWarn, a, "attest-key", "preview firmware version %s skips the %s attestation gate and proceeds to ATTEST KEY", version, attestationMinVersion)
+	} else {
+		supported, err := attestationVersionSupported(version)
+		if err != nil {
+			return nil, fmt.Errorf("yubikey: parse firmware version %q for attestation: %w", version, err)
+		}
+		if !supported {
+			return nil, fmt.Errorf("yubikey: firmware %s is not supported for key attestation, requires %s or later", version, attestationMinVersion)
+		}
 	}
 	session.Observe(adapters.LogLevelDebug, a, "attest-key", "issuing YubiKey ATTEST KEY for %s", slot)
 	cmd := &iso7816.Command{
@@ -69,10 +73,10 @@ func (a *Adapter) AttestKey(session *adapters.Session, slot piv.Slot) ([]byte, e
 	}
 	resp, err := session.Client.Execute(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("attest YubiKey key in slot %s: %w", slot, err)
+		return nil, fmt.Errorf("attest YubiKey key in slot %s (firmware %s): %w", slot, version, err)
 	}
 	if err := resp.Err(); err != nil {
-		return nil, fmt.Errorf("attest YubiKey key in slot %s: %w", slot, err)
+		return nil, fmt.Errorf("attest YubiKey key in slot %s (firmware %s): %w", slot, version, err)
 	}
 	if len(resp.Data) == 0 {
 		return nil, fmt.Errorf("attest YubiKey key in slot %s: empty attestation response", slot)
@@ -112,6 +116,23 @@ func isAttestableSlot(slot piv.Slot) bool {
 	default:
 		return false
 	}
+}
+
+// isPreviewPlaceholderVersion reports whether the firmware version string
+// is a pre-release placeholder (major version 0, for example "0.0.1").
+// Preview firmware skips the attestation version gate: the raw version is
+// observed at warn level and attestation proceeds to INS 0xF9. Unparseable
+// input returns false so the standard gate reports the parse error.
+func isPreviewPlaceholderVersion(version string) bool {
+	fields := strings.Split(strings.TrimSpace(version), ".")
+	if len(fields) == 0 {
+		return false
+	}
+	major, err := strconv.Atoi(fields[0])
+	if err != nil || major < 0 {
+		return false
+	}
+	return major == 0
 }
 
 // attestationVersionSupported reports whether the firmware version string

@@ -251,6 +251,26 @@ func AlgorithmName(value byte) string {
 		return "rsa1024"
 	case piv.AlgRSA2048:
 		return "rsa2048"
+	case piv.AlgRSA3072:
+		return "rsa3072"
+	case piv.AlgRSA4096:
+		return "rsa4096"
+	case piv.AlgEd25519:
+		return "ed25519"
+	case piv.AlgX25519:
+		return "x25519"
+	case piv.AlgMLDSA44:
+		return "mldsa44"
+	case piv.AlgMLDSA65:
+		return "mldsa65"
+	case piv.AlgMLDSA87:
+		return "mldsa87"
+	case piv.AlgMLKEM512:
+		return "mlkem512"
+	case piv.AlgMLKEM768:
+		return "mlkem768"
+	case piv.AlgMLKEM1024:
+		return "mlkem1024"
 	case piv.Alg3DES:
 		return "3des"
 	case piv.AlgAES128:
@@ -284,9 +304,57 @@ func InferPublicKeyAlgorithm(publicKey crypto.PublicKey) (byte, string, error) {
 		if bits <= 2048 {
 			return piv.AlgRSA2048, "rsa2048", nil
 		}
+		if bits <= 3072 {
+			return piv.AlgRSA3072, "rsa3072", nil
+		}
+		if bits <= 4096 {
+			return piv.AlgRSA4096, "rsa4096", nil
+		}
 		return 0, "", UnsupportedError("the selected slot uses an unsupported RSA key size", "use a slot backed by rsa1024 or rsa2048")
+	case *piv.OpaquePublicKey:
+		return inferOpaqueKeyAlgorithm(key.Algorithm, publicKey)
+	case piv.OpaquePublicKey:
+		return inferOpaqueKeyAlgorithm(key.Algorithm, publicKey)
 	default:
 		return 0, "", UnsupportedError(fmt.Sprintf("unsupported public key type %T", publicKey), "use piv key public to inspect the slot")
+	}
+}
+
+// inferOpaqueKeyAlgorithm resolves a PIV algorithm identifier from a
+// YubiKey 6 opaque public key. Only recognized extension algorithms resolve;
+// anything else stays an unsupported capability.
+func inferOpaqueKeyAlgorithm(algorithm byte, publicKey crypto.PublicKey) (byte, string, error) {
+	if piv.IsYubiKey6Algorithm(algorithm) {
+		return algorithm, AlgorithmName(algorithm), nil
+	}
+	return 0, "", UnsupportedError(fmt.Sprintf("unsupported public key type %T", publicKey), "use piv key public to inspect the slot")
+}
+
+// opaquePublicKeyAlgorithm extracts the algorithm identifier from a YubiKey 6
+// opaque public key in either pointer or value form.
+func opaquePublicKeyAlgorithm(publicKey crypto.PublicKey) (byte, bool) {
+	switch key := publicKey.(type) {
+	case *piv.OpaquePublicKey:
+		if key == nil {
+			return 0, false
+		}
+		return key.Algorithm, true
+	case piv.OpaquePublicKey:
+		return key.Algorithm, true
+	default:
+		return 0, false
+	}
+}
+
+// isPostQuantumAlgorithm reports whether the identifier selects an ML-DSA
+// or ML-KEM algorithm without a PEM/DER encoding in this release.
+func isPostQuantumAlgorithm(algorithm byte) bool {
+	switch algorithm {
+	case piv.AlgMLDSA44, piv.AlgMLDSA65, piv.AlgMLDSA87,
+		piv.AlgMLKEM512, piv.AlgMLKEM768, piv.AlgMLKEM1024:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -319,7 +387,13 @@ func ParseCertificateData(data []byte) ([]byte, error) {
 }
 
 // EncodePublicKey serializes a public key as PEM or DER.
+//
+// Post-quantum YubiKey 6 keys (ML-DSA/ML-KEM) have no PEM/DER encoding here
+// and report an unsupported capability instead of panicking inside x509.
 func EncodePublicKey(publicKey crypto.PublicKey, format string) ([]byte, error) {
+	if algorithm, ok := opaquePublicKeyAlgorithm(publicKey); ok && isPostQuantumAlgorithm(algorithm) {
+		return nil, UnsupportedError("the selected slot uses a post-quantum algorithm without PEM or DER encoding support", "use piv key public to inspect the slot")
+	}
 	der, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil {
 		return nil, InternalError("unable to encode public key", "inspect the slot and retry", err)

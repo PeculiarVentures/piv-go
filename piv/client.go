@@ -72,7 +72,13 @@ func (c *Client) GetCertificate(slot Slot) ([]byte, error) {
 
 // Sign performs a GENERAL AUTHENTICATE operation to sign data using
 // the key in the specified slot with the given algorithm.
+//
+// YubiKey 6 extension algorithms (see IsYubiKey6Algorithm) are rejected
+// without sending an APDU: signing with them is not supported by this release.
 func (c *Client) Sign(alg byte, slot Slot, data []byte) ([]byte, error) {
+	if IsYubiKey6Algorithm(alg) {
+		return nil, unsupportedExtendedAlgorithmError(fmt.Sprintf("sign with slot %s", slot), alg)
+	}
 	resp, err := c.sendCommand(generalAuthenticateCommand(alg, slot, data))
 	if err != nil {
 		return nil, fmt.Errorf("piv: sign with slot %s: %w", slot, err)

@@ -30,6 +30,9 @@ func (a *Adapter) GenerateKey(session *adapters.Session, slot piv.Slot, algorith
 	if err := requireSessionClient(session); err != nil {
 		return nil, err
 	}
+	if piv.IsYubiKey6Algorithm(algorithm) {
+		return nil, fmt.Errorf("generate YubiKey key in slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
+	}
 	session.Observe(adapters.LogLevelInfo, a, "generate-key", "starting YubiKey key generation for %s", slot)
 	if err := session.AuthenticateManagementKey(a); err != nil {
 		return nil, fmt.Errorf("authenticate management key: %w", err)
@@ -56,6 +59,9 @@ func (a *Adapter) GenerateKey(session *adapters.Session, slot piv.Slot, algorith
 func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
 	if err := requireSessionClient(session); err != nil {
 		return err
+	}
+	if piv.IsYubiKey6Algorithm(algorithm) {
+		return fmt.Errorf("import YubiKey key into slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
 	}
 	session.Observe(adapters.LogLevelInfo, a, "import-key", "starting YubiKey key import for %s", slot)
 	if err := session.AuthenticateManagementKey(a); err != nil {
@@ -86,7 +92,7 @@ func importedPublicKey(privateKey crypto.PrivateKey) (crypto.PublicKey, error) {
 	case *ecdsa.PrivateKey:
 		return &key.PublicKey, nil
 	default:
-		return nil, fmt.Errorf("unsupported private key type %T", privateKey)
+		return nil, fmt.Errorf("unsupported private key type %T: not supported by this release", privateKey)
 	}
 }
 

@@ -55,6 +55,9 @@ const (
 // own default policy instead of preserving the slot's previous policy; values
 // above 0x03 are rejected.
 func (c *Client) ImportKey(slot Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
+	if IsYubiKey6Algorithm(algorithm) {
+		return unsupportedExtendedAlgorithmError("import", algorithm)
+	}
 	data, err := encodeImportKeyData(algorithm, privateKey, pinPolicy, touchPolicy)
 	if err != nil {
 		return err

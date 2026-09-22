@@ -78,6 +78,9 @@ func (c *Client) GenerateKeyPair(slot Slot, algorithm byte) (crypto.PublicKey, e
 // ASYMMETRIC KEY PAIR command. Policy values above 0x03 are rejected as
 // unsupported.
 func (c *Client) GenerateKeyPairWithPolicies(slot Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error) {
+	if IsYubiKey6Algorithm(algorithm) {
+		return nil, unsupportedExtendedAlgorithmError("key generation", algorithm)
+	}
 	cmd, err := generateAsymmetricKeyPairWithPoliciesCommand(slot, algorithm, pinPolicy, touchPolicy)
 	if err != nil {
 		return nil, err
@@ -186,7 +189,7 @@ func parseGeneratedPublicKey(algorithm byte, data []byte) (crypto.PublicKey, err
 	}
 
 	switch algorithm {
-	case AlgRSA1024, AlgRSA2048:
+	case AlgRSA1024, AlgRSA2048, AlgRSA3072, AlgRSA4096:
 		modulusTLV := iso7816.FindTag(innerTLVs, 0x81)
 		exponentTLV := iso7816.FindTag(innerTLVs, 0x82)
 		if modulusTLV == nil || exponentTLV == nil {
@@ -206,15 +209,39 @@ func parseGeneratedPublicKey(algorithm byte, data []byte) (crypto.PublicKey, err
 		return parseECDSAPublicKey(elliptic.P256(), innerTLVs)
 	case AlgECCP384:
 		return parseECDSAPublicKey(elliptic.P384(), innerTLVs)
+	case AlgEd25519, AlgX25519:
+		return parseOpaquePublicKey(algorithm, innerTLVs, 0x86)
+	case AlgMLDSA44, AlgMLDSA65, AlgMLDSA87:
+		return parseOpaquePublicKey(algorithm, innerTLVs, 0x87)
+	case AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024:
+		return parseOpaquePublicKey(algorithm, innerTLVs, 0x88)
 	default:
 		return nil, fmt.Errorf("unsupported key generation algorithm 0x%02X", algorithm)
 	}
+}
+
+// parseOpaquePublicKey extracts a YubiKey 6 opaque public key for the given
+// algorithm from the expected tag. Unknown tags or lengths produce a typed
+// error, never a panic.
+func parseOpaquePublicKey(algorithm byte, tlvs []*iso7816.TLV, tag uint) (crypto.PublicKey, error) {
+	keyTLV := iso7816.FindTag(tlvs, tag)
+	if keyTLV == nil {
+		return nil, &UnsupportedPublicKeyError{Tag: tag, Length: -1, Detail: fmt.Sprintf("public key tag 0x%X not found for algorithm 0x%02X", tag, algorithm)}
+	}
+	size, ok := yubiKey6PublicKeyLength(algorithm)
+	if !ok || len(keyTLV.Value) != size {
+		return nil, &UnsupportedPublicKeyError{Tag: tag, Length: len(keyTLV.Value), Detail: fmt.Sprintf("unsupported key length %d for algorithm 0x%02X", len(keyTLV.Value), algorithm)}
+	}
+	return &OpaquePublicKey{Algorithm: algorithm, Raw: append([]byte(nil), keyTLV.Value...)}, nil
 }
 
 // StoreGeneratedPublicKey stores the generated public key in the slot's PIV
 // data object using the same 0x53 wrapper shape used by SafeNet's PKCS#11
 // interface after on-device key generation.
 func (c *Client) StoreGeneratedPublicKey(slot Slot, algorithm byte, publicKey crypto.PublicKey) error {
+	if IsYubiKey6Algorithm(algorithm) {
+		return unsupportedExtendedAlgorithmError("store generated public key", algorithm)
+	}
 	tag := slotToObjectID(slot)
 	if tag == 0 {
 		return fmt.Errorf("unsupported slot %s", slot)
