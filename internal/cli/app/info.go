@@ -247,7 +247,11 @@ func (s *InfoService) CertExport(ctx context.Context, request ExportRequest) (Re
 	return response, nil
 }
 
-// KeyPublic exports a public key in PEM or DER format.
+// KeyPublic exports a public key in PEM or DER format. Ed25519 opaque keys
+// encode as standard PEM/DER through the standard library. All other opaque
+// keys (X25519, ML-DSA/ML-KEM, ambiguous) keep the PEM/DER gap and must be
+// exported with --format raw, base64, or hex, which renders the raw key
+// bytes via EncodeBinary.
 func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Response, error) {
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
@@ -268,6 +272,9 @@ func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Res
 	if format == "" {
 		format = "pem"
 	}
+	if _, ok := opaquePublicKeyAlgorithm(publicKey); ok && isOpaqueRawFormat(format) {
+		return s.opaqueKeyResponse(target, request, publicKey, format)
+	}
 	encoded, err := EncodePublicKey(publicKey, format)
 	if err != nil {
 		return Response{}, err
@@ -287,6 +294,69 @@ func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Res
 		}
 	} else {
 		result.Data = string(encoded)
+	}
+	response := Response{Command: "key-public", Target: target.Summary, Result: result}
+	if request.Out == "" {
+		response.rawOutput = encoded
+	}
+	response.traceLines = target.TraceLines()
+	return response, nil
+}
+
+// isOpaqueRawFormat reports whether the requested public key format selects
+// raw opaque bytes instead of PEM/DER.
+func isOpaqueRawFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "raw", "base64", "hex":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *InfoService) opaqueKeyResponse(target *ResolvedTarget, request ExportRequest, publicKey interface{}, format string) (Response, error) {
+	var raw []byte
+	switch key := publicKey.(type) {
+	case *piv.OpaquePublicKey:
+		if key == nil {
+			return Response{}, NotFoundError("the requested public key is not present", "inspect slot state with piv slot show <slot>", nil)
+		}
+		raw = key.Raw
+	case piv.OpaquePublicKey:
+		raw = key.Raw
+	default:
+		return Response{}, UnsupportedError("the selected slot uses an opaque key without PEM or DER encoding support", "rerun with --format raw, base64, or hex for the opaque key bytes")
+	}
+	normalized := strings.ToLower(strings.TrimSpace(format))
+	switch normalized {
+	case "pem", "der":
+		return Response{}, UnsupportedError("the selected slot uses an opaque key without PEM or DER encoding support", "rerun with --format raw, base64, or hex for the opaque key bytes")
+	case "", "base64", "hex", "raw":
+		if normalized == "" {
+			normalized = "base64"
+		}
+	default:
+		return Response{}, UsageError("unsupported public key format", "use pem, der, raw, base64, or hex (raw encodings for post-quantum keys)")
+	}
+	encoded, effectiveEncoding, err := EncodeBinary(raw, normalized)
+	if err != nil {
+		return Response{}, err
+	}
+	result := ArtifactResult{Kind: "public-key", Format: effectiveEncoding, Encoding: effectiveEncoding, Size: len(encoded)}
+	if request.Out != "" {
+		if err := os.WriteFile(request.Out, encoded, 0o644); err != nil {
+			return Response{}, IOError("unable to write public key output", "check the output path and permissions", err)
+		}
+		result.Path = request.Out
+	} else if request.Global.JSON {
+		if effectiveEncoding == "raw" {
+			result.Data = base64.StdEncoding.EncodeToString(raw)
+			result.Encoding = "base64"
+		} else {
+			result.Data = strings.TrimSpace(string(encoded))
+		}
+	} else {
+		result.Data = strings.TrimSpace(string(encoded))
 	}
 	response := Response{Command: "key-public", Target: target.Summary, Result: result}
 	if request.Out == "" {

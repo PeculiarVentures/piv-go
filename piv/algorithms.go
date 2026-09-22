@@ -14,10 +14,11 @@ const (
 
 // YubiKey 6 extension algorithm identifiers.
 //
-// These identifiers are recognized for key discovery and display only.
-// Key generation, import, and signing with these algorithms are explicitly
-// rejected (see IsYubiKey6Algorithm): full cryptographic support, private
-// key encodings, and KEM operations are out of scope for this release.
+// These identifiers are recognized for key discovery, display, and (per the
+// pqc-v1 matrix) card operations: RSA-3072/4096 generate/import/sign,
+// Ed25519 generate/import/sign, X25519 generate/import plus ECDH key
+// agreement (no signing), and ML-DSA generate/sign (preview, no import).
+// ML-KEM remains discovery-only: it has no APDU flow and gap-rejects.
 const (
 	// AlgRSA3072 selects RSA-3072 (YubiKey 6 extension).
 	AlgRSA3072 byte = 0x05

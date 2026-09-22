@@ -29,6 +29,9 @@ func (c *cli) newCertCommand() *cobra.Command {
 	export.Flags().StringVar(&exportFormat, "format", "", "Export format: pem or der")
 	export.Flags().StringVarP(&exportOut, "out", "o", "", "Write the certificate to a file")
 
+	var importRawCert bool
+	var importMGMStdin bool
+	var importMGMEnv string
 	importCommand := &cobra.Command{
 		Use:   "import <slot> <path>",
 		Short: "Import a certificate into a slot",
@@ -39,13 +42,18 @@ func (c *cli) newCertCommand() *cobra.Command {
 				return err
 			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
-				return c.mutations.CertImport(ctx, app.CertImportRequest{Global: global, Slot: slot, Path: args[1]})
+				return c.mutations.CertImport(ctx, app.CertImportRequest{Global: global, Slot: slot, Path: args[1], Raw: importRawCert, ManagementKey: secretRequest("management key", "Enter management key: ", importMGMEnv, "PIV_MANAGEMENT_KEY", importMGMStdin)})
 			})
 		},
 	}
+	importCommand.Flags().BoolVar(&importRawCert, "raw-cert", false, "Store raw certificate bytes without X.509 validation (required for ML-DSA post-quantum certificates; X25519 has no X.509 profile)")
+	importCommand.Flags().BoolVar(&importMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
+	importCommand.Flags().StringVar(&importMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
 
 	deleteYes := false
 	deleteDryRun := false
+	var deleteMGMStdin bool
+	var deleteMGMEnv string
 	deleteCommand := &cobra.Command{
 		Use:   "delete <slot>",
 		Short: "Delete a slot certificate",
@@ -56,12 +64,14 @@ func (c *cli) newCertCommand() *cobra.Command {
 				return err
 			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
-				return c.mutations.CertDelete(ctx, app.DeleteRequest{Global: global, Slot: slot, Yes: deleteYes, DryRun: deleteDryRun})
+				return c.mutations.CertDelete(ctx, app.DeleteRequest{Global: global, Slot: slot, Yes: deleteYes, DryRun: deleteDryRun, ManagementKey: secretRequest("management key", "Enter management key: ", deleteMGMEnv, "PIV_MANAGEMENT_KEY", deleteMGMStdin)})
 			})
 		},
 	}
 	deleteCommand.Flags().BoolVarP(&deleteYes, "yes", "y", false, "Skip the destructive-operation confirmation")
 	deleteCommand.Flags().BoolVar(&deleteDryRun, "dry-run", false, "Show the planned action without mutating the token")
+	deleteCommand.Flags().BoolVar(&deleteMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
+	deleteCommand.Flags().StringVar(&deleteMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
 
 	command.AddCommand(export, importCommand, deleteCommand)
 	return command
@@ -111,7 +121,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	generate.Flags().StringVar(&generateAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, or rsa2048")
+	generate.Flags().StringVar(&generateAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mldsa44, mldsa65, mldsa87 (preview), mlkem512, mlkem768, mlkem1024 (parse then gap-reject)")
 	_ = generate.MarkFlagRequired("alg")
 	generate.Flags().BoolVar(&generateMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	generate.Flags().StringVar(&generateMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
@@ -135,7 +145,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	public.Flags().StringVar(&publicFormat, "format", "", "Export format: pem or der")
+	public.Flags().StringVar(&publicFormat, "format", "", "Export format: pem, der, or (opaque X25519/post-quantum keys) raw, base64, hex")
 	public.Flags().StringVarP(&publicOut, "out", "o", "", "Write the public key to a file")
 
 	var attestFormat string
@@ -225,7 +235,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	var challengePINEnv string
 	challenge := &cobra.Command{
 		Use:   "challenge <slot>",
-		Short: "Run GENERAL AUTHENTICATE with a supplied challenge",
+		Short: "Run GENERAL AUTHENTICATE with a supplied challenge (X25519 slots perform ECDH)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slot, err := app.ParseSlotForMutation(args[0])
@@ -246,7 +256,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	challenge.Flags().StringVar(&challengeHex, "challenge-hex", "", "Hexadecimal challenge input")
+	challenge.Flags().StringVar(&challengeHex, "challenge-hex", "", "Hexadecimal challenge input (32-byte peer public key for X25519 ECDH)")
 	_ = challenge.MarkFlagRequired("challenge-hex")
 	challenge.Flags().StringVar(&challengeEncoding, "encoding", "base64", "Output encoding: base64, hex, or raw")
 	challenge.Flags().StringVarP(&challengeOut, "out", "o", "", "Write the challenge response to a file")
@@ -296,9 +306,9 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	importKey.Flags().StringVar(&importAlgorithm, "alg", "", "Key algorithm: p256 or rsa2048")
+	importKey.Flags().StringVar(&importAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519 (mldsa/mlkem parse then gap-reject import)")
 	_ = importKey.MarkFlagRequired("alg")
-	importKey.Flags().StringVar(&importPath, "in", "", "Read the private key from a PEM or DER file")
+	importKey.Flags().StringVar(&importPath, "in", "", "Read the private key from a PEM or DER file (ed25519/x25519 also accept a raw 32-byte seed as binary, hex, or base64)")
 	_ = importKey.MarkFlagRequired("in")
 	importKey.Flags().BoolVar(&importMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	importKey.Flags().StringVar(&importMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")

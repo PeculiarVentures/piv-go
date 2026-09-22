@@ -2,7 +2,9 @@ package piv
 
 import (
 	"crypto"
+	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"fmt"
 	"math/big"
@@ -48,14 +50,19 @@ const (
 
 // ImportKey imports a private key into the specified slot using the YubiKey
 // IMPORT KEY command (00 FE <key_type> <slot>). Only two-prime RSA keys with
-// exponent 65537 and ECDSA keys are supported; multi-prime RSA keys and other
-// private key types are rejected as unsupported (deferred). The algorithm byte
-// selects the key type and must be one of AlgRSA1024, AlgRSA2048, AlgECCP256, or AlgECCP384. Policy value 0x00
+// exponent 65537 and ECDSA keys are supported for the baseline algorithms;
+// YubiKey 6 RSA-3072/4096 use the same RSA halves encoding with half lengths
+// 192/256, and Ed25519/X25519 import a 32-byte raw seed via tags 0x07/0x08.
+// Ed25519 accepts ed25519.PrivateKey (seed taken from the first 32 bytes),
+// X25519 accepts *ecdh.PrivateKey, and both accept *OpaquePrivateKey,
+// OpaquePrivateKey, or a raw 32-byte []byte. ML-DSA and ML-KEM have no import
+// APDU and gap-reject without sending a command. The algorithm byte
+// selects the key type and must match the private key. Policy value 0x00
 // (default) omits the corresponding tag, in which case the device applies its
 // own default policy instead of preserving the slot's previous policy; values
 // above 0x03 are rejected.
 func (c *Client) ImportKey(slot Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
-	if IsYubiKey6Algorithm(algorithm) {
+	if IsMLKEMAlgorithm(algorithm) || IsMLDSAAlgorithm(algorithm) {
 		return unsupportedExtendedAlgorithmError("import", algorithm)
 	}
 	data, err := encodeImportKeyData(algorithm, privateKey, pinPolicy, touchPolicy)
@@ -114,6 +121,44 @@ func encodeImportKeyData(algorithm byte, privateKey crypto.PrivateKey, pinPolicy
 			return nil, err
 		}
 		data = iso7816.EncodeTLV(0x06, paddedBigInt(key.D, scalarLen))
+	case ed25519.PrivateKey:
+		if algorithm != AlgEd25519 {
+			return nil, fmt.Errorf("piv: unsupported import algorithm 0x%02X for Ed25519 private key", algorithm)
+		}
+		if len(key) != ed25519.PrivateKeySize {
+			return nil, fmt.Errorf("piv: unsupported Ed25519 private key length %d", len(key))
+		}
+		data = iso7816.EncodeTLV(0x07, append([]byte(nil), key.Seed()...))
+	case *ecdh.PrivateKey:
+		if algorithm != AlgX25519 {
+			return nil, fmt.Errorf("piv: unsupported import algorithm 0x%02X for X25519 private key", algorithm)
+		}
+		if key.Curve() != ecdh.X25519() {
+			return nil, fmt.Errorf("piv: unsupported ECDH curve for X25519 import")
+		}
+		raw := key.Bytes()
+		if len(raw) != 32 {
+			return nil, fmt.Errorf("piv: unsupported X25519 private key length %d", len(raw))
+		}
+		data = iso7816.EncodeTLV(0x08, raw)
+	case *OpaquePrivateKey:
+		raw, tag, err := opaqueImportFields(algorithm, key.Algorithm, key.Raw)
+		if err != nil {
+			return nil, err
+		}
+		data = iso7816.EncodeTLV(tag, raw)
+	case OpaquePrivateKey:
+		raw, tag, err := opaqueImportFields(algorithm, key.Algorithm, key.Raw)
+		if err != nil {
+			return nil, err
+		}
+		data = iso7816.EncodeTLV(tag, raw)
+	case []byte:
+		raw, tag, err := opaqueImportFields(algorithm, algorithm, key)
+		if err != nil {
+			return nil, err
+		}
+		data = iso7816.EncodeTLV(tag, raw)
 	default:
 		return nil, fmt.Errorf("piv: unsupported private key type %T", privateKey)
 	}
@@ -138,6 +183,16 @@ func rsaImportHalfLength(algorithm byte, key *rsa.PrivateKey) (int, error) {
 			return 0, fmt.Errorf("piv: unsupported import: RSA-2048 requires a 2048-bit key, got %d bits", key.N.BitLen())
 		}
 		return 128, nil
+	case AlgRSA3072:
+		if key.N.BitLen() != 3072 {
+			return 0, fmt.Errorf("piv: unsupported import: RSA-3072 requires a 3072-bit key, got %d bits", key.N.BitLen())
+		}
+		return 192, nil
+	case AlgRSA4096:
+		if key.N.BitLen() != 4096 {
+			return 0, fmt.Errorf("piv: unsupported import: RSA-4096 requires a 4096-bit key, got %d bits", key.N.BitLen())
+		}
+		return 256, nil
 	default:
 		return 0, fmt.Errorf("piv: unsupported import algorithm 0x%02X", algorithm)
 	}
@@ -168,4 +223,26 @@ func paddedBigInt(value *big.Int, length int) []byte {
 	padded := make([]byte, length)
 	copy(padded[length-len(raw):], raw)
 	return padded
+}
+
+// opaqueImportFields validates a 32-byte raw seed for Ed25519/X25519 import
+// and resolves the IMPORT KEY tag: 0x07 for Ed25519, 0x08 for X25519. A zero
+// key algorithm defers to the requested algorithm.
+func opaqueImportFields(requestedAlgorithm byte, keyAlgorithm byte, raw []byte) ([]byte, uint, error) {
+	var tag uint
+	switch requestedAlgorithm {
+	case AlgEd25519:
+		tag = 0x07
+	case AlgX25519:
+		tag = 0x08
+	default:
+		return nil, 0, fmt.Errorf("piv: unsupported import algorithm 0x%02X for raw private key", requestedAlgorithm)
+	}
+	if keyAlgorithm != 0 && keyAlgorithm != requestedAlgorithm {
+		return nil, 0, fmt.Errorf("piv: unsupported import: key algorithm 0x%02X does not match requested algorithm 0x%02X", keyAlgorithm, requestedAlgorithm)
+	}
+	if len(raw) != 32 {
+		return nil, 0, fmt.Errorf("piv: unsupported raw private key length %d, must be 32 bytes", len(raw))
+	}
+	return append([]byte(nil), raw...), tag, nil
 }

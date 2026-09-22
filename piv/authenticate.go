@@ -7,8 +7,16 @@ import (
 )
 
 // Authenticate performs a GENERAL AUTHENTICATE operation with the specified
-// algorithm and slot using the provided challenge data.
+// algorithm and slot using the provided challenge data. X25519 cannot
+// authenticate and rejects with "x25519 cannot sign: use ECDH"; ML-KEM
+// gap-rejects without sending an APDU.
 func (c *Client) Authenticate(algorithm byte, slot Slot, challenge []byte) ([]byte, error) {
+	if algorithm == AlgX25519 {
+		return nil, x25519SignError(fmt.Sprintf("slot %s", slot))
+	}
+	if IsMLKEMAlgorithm(algorithm) {
+		return nil, unsupportedExtendedAlgorithmError("authenticate", algorithm)
+	}
 	inner := iso7816.EncodeTLV(0x82, nil)
 	inner = append(inner, iso7816.EncodeTLV(0x81, challenge)...)
 	authTemplate := iso7816.EncodeTLV(0x7C, inner)

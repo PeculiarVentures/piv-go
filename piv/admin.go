@@ -78,7 +78,7 @@ func (c *Client) GenerateKeyPair(slot Slot, algorithm byte) (crypto.PublicKey, e
 // ASYMMETRIC KEY PAIR command. Policy values above 0x03 are rejected as
 // unsupported.
 func (c *Client) GenerateKeyPairWithPolicies(slot Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error) {
-	if IsYubiKey6Algorithm(algorithm) {
+	if IsMLKEMAlgorithm(algorithm) {
 		return nil, unsupportedExtendedAlgorithmError("key generation", algorithm)
 	}
 	cmd, err := generateAsymmetricKeyPairWithPoliciesCommand(slot, algorithm, pinPolicy, touchPolicy)
@@ -237,9 +237,11 @@ func parseOpaquePublicKey(algorithm byte, tlvs []*iso7816.TLV, tag uint) (crypto
 
 // StoreGeneratedPublicKey stores the generated public key in the slot's PIV
 // data object using the same 0x53 wrapper shape used by SafeNet's PKCS#11
-// interface after on-device key generation.
+// interface after on-device key generation. YubiKey 6 RSA-3072/4096,
+// Ed25519/X25519, and ML-DSA keys are supported; ML-KEM remains a gap and
+// rejects without an APDU.
 func (c *Client) StoreGeneratedPublicKey(slot Slot, algorithm byte, publicKey crypto.PublicKey) error {
-	if IsYubiKey6Algorithm(algorithm) {
+	if IsMLKEMAlgorithm(algorithm) {
 		return unsupportedExtendedAlgorithmError("store generated public key", algorithm)
 	}
 	tag := slotToObjectID(slot)
@@ -278,7 +280,7 @@ func parseECDSAPublicKey(curve elliptic.Curve, tlvs []*iso7816.TLV) (crypto.Publ
 
 func encodeGeneratedPublicKeyTemplate(algorithm byte, publicKey crypto.PublicKey) ([]byte, error) {
 	switch algorithm {
-	case AlgRSA1024, AlgRSA2048:
+	case AlgRSA1024, AlgRSA2048, AlgRSA3072, AlgRSA4096:
 		rsaKey, ok := publicKey.(*rsa.PublicKey)
 		if !ok {
 			return nil, fmt.Errorf("expected RSA public key, got %T", publicKey)
@@ -298,7 +300,39 @@ func encodeGeneratedPublicKeyTemplate(algorithm byte, publicKey crypto.PublicKey
 			return nil, err
 		}
 		return iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point)), nil
+	case AlgEd25519, AlgX25519:
+		raw, err := opaquePublicKeyRaw(publicKey)
+		if err != nil {
+			return nil, err
+		}
+		if size, ok := yubiKey6PublicKeyLength(algorithm); !ok || len(raw) != size {
+			return nil, fmt.Errorf("unsupported key length %d for algorithm 0x%02X", len(raw), algorithm)
+		}
+		return iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, raw)), nil
+	case AlgMLDSA44, AlgMLDSA65, AlgMLDSA87:
+		raw, err := opaquePublicKeyRaw(publicKey)
+		if err != nil {
+			return nil, err
+		}
+		if size, ok := yubiKey6PublicKeyLength(algorithm); !ok || len(raw) != size {
+			return nil, fmt.Errorf("unsupported key length %d for algorithm 0x%02X", len(raw), algorithm)
+		}
+		return iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x87, raw)), nil
 	default:
 		return nil, fmt.Errorf("unsupported key algorithm 0x%02X", algorithm)
+	}
+}
+
+func opaquePublicKeyRaw(publicKey crypto.PublicKey) ([]byte, error) {
+	switch key := publicKey.(type) {
+	case *OpaquePublicKey:
+		if key == nil {
+			return nil, fmt.Errorf("expected opaque public key, got nil")
+		}
+		return append([]byte(nil), key.Raw...), nil
+	case OpaquePublicKey:
+		return append([]byte(nil), key.Raw...), nil
+	default:
+		return nil, fmt.Errorf("expected opaque public key, got %T", publicKey)
 	}
 }

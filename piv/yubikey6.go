@@ -41,8 +41,9 @@ func (e *UnsupportedPublicKeyError) Error() string {
 
 // IsYubiKey6Algorithm reports whether the algorithm identifier belongs to
 // the YubiKey 6 extension set. Extension algorithms are recognized for key
-// discovery and display only: generation, import, and signing reject them
-// without sending an APDU.
+// discovery and display; per the pqc-v1 matrix most card operations are
+// implemented (RSA-3072/4096, Ed25519, X25519 key agreement, ML-DSA) while
+// ML-KEM remains a gap without an APDU flow.
 func IsYubiKey6Algorithm(algorithm byte) bool {
 	switch algorithm {
 	case AlgRSA3072, AlgRSA4096,
@@ -99,6 +100,46 @@ func inferOpaqueAlgorithm(tag uint, length int) (byte, bool) {
 		}
 	}
 	return 0, false
+}
+
+// OpaquePrivateKey carries raw private key material for YubiKey 6 algorithms
+// without a Go standard-library private key representation. Algorithm holds
+// the PIV algorithm identifier (for example AlgEd25519) and Raw holds the
+// card encoding verbatim: 32-byte raw seed for Ed25519/X25519.
+type OpaquePrivateKey struct {
+	Algorithm byte
+	Raw       []byte
+}
+
+// IsMLKEMAlgorithm reports whether the identifier selects an ML-KEM variant.
+// ML-KEM has no KEM APDU flow in this release: every card-touching operation
+// gap-rejects without sending an APDU.
+func IsMLKEMAlgorithm(algorithm byte) bool {
+	switch algorithm {
+	case AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsMLDSAAlgorithm reports whether the identifier selects an ML-DSA variant.
+func IsMLDSAAlgorithm(algorithm byte) bool {
+	switch algorithm {
+	case AlgMLDSA44, AlgMLDSA65, AlgMLDSA87:
+		return true
+	default:
+		return false
+	}
+}
+
+// x25519SignError reports the explicit rejection of X25519 signing. X25519 is
+// a key-agreement algorithm: use CalculateSecret (ECDH) instead. The message
+// keeps both the "x25519 cannot sign: use ECDH" hint and the "not supported"
+// substring so the CLI error mapper classifies it as an unsupported
+// capability (exit 4) instead of an internal error.
+func x25519SignError(operation string) error {
+	return fmt.Errorf("piv: x25519 cannot sign: use ECDH for %s: not supported by this release", operation)
 }
 
 // unsupportedExtendedAlgorithmError reports the explicit rejection of a

@@ -88,23 +88,23 @@ func TestYubiKeyAdapterVersionReturnsPreviewRaw(t *testing.T) {
 	}
 }
 
-func TestYubiKeyAdapterGenerateImportRejectYubiKey6WithoutAPDU(t *testing.T) {
-	algorithms := []byte{
-		piv.AlgRSA3072, piv.AlgRSA4096,
-		piv.AlgEd25519, piv.AlgX25519,
-		piv.AlgMLDSA44, piv.AlgMLDSA65, piv.AlgMLDSA87,
-		piv.AlgMLKEM512, piv.AlgMLKEM768, piv.AlgMLKEM1024,
-	}
-	for _, algorithm := range algorithms {
+func TestYubiKeyAdapterGenerateImportGapWithoutAPDU(t *testing.T) {
+	for _, algorithm := range []byte{piv.AlgMLKEM512, piv.AlgMLKEM768, piv.AlgMLKEM1024} {
 		mock := emulator.NewCard()
 		if _, err := NewAdapter().GenerateKey(newYubiKeyPolicySession(mock), piv.SlotSignature, algorithm, 0x00, 0x00); err == nil || !strings.Contains(err.Error(), "not supported") {
 			t.Fatalf("generate 0x%02X: expected not-supported error, got %v", algorithm, err)
 		}
+		if len(mock.TransmittedCommands) != 0 {
+			t.Fatalf("generate 0x%02X: no APDU must be sent on rejection, got %d commands", algorithm, len(mock.TransmittedCommands))
+		}
+	}
+	for _, algorithm := range []byte{piv.AlgMLDSA44, piv.AlgMLDSA65, piv.AlgMLDSA87, piv.AlgMLKEM512, piv.AlgMLKEM768, piv.AlgMLKEM1024} {
+		mock := emulator.NewCard()
 		if err := NewAdapter().ImportKey(newYubiKeyPolicySession(mock), piv.SlotSignature, algorithm, "not-a-key", 0x00, 0x00); err == nil || !strings.Contains(err.Error(), "not supported") {
 			t.Fatalf("import 0x%02X: expected not-supported error, got %v", algorithm, err)
 		}
 		if len(mock.TransmittedCommands) != 0 {
-			t.Fatalf("algorithm 0x%02X: no APDU must be sent on rejection, got %d commands", algorithm, len(mock.TransmittedCommands))
+			t.Fatalf("import 0x%02X: no APDU must be sent on rejection, got %d commands", algorithm, len(mock.TransmittedCommands))
 		}
 	}
 }

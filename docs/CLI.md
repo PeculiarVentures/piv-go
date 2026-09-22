@@ -105,6 +105,54 @@ YubiKey slot policies: `key generate` and `key import` accept
 of preserving the slot's previous policies). `mgm rotate` accepts `--touch`
 to require touch confirmation for management operations.
 
+## YubiKey 6 preview algorithms (pqc-v1)
+
+`key generate` and `key import` accept `--alg` (case-insensitive):
+`p256`, `p384` (`eccp256`, `eccp384` aliases), `rsa1024`, `rsa2048`,
+`rsa3072`, `rsa4096`, `ed25519`, `x25519`, `mldsa44`, `mldsa65`, `mldsa87`
+(preview), `mlkem512`, `mlkem768`, `mlkem1024` (parsed, then gap-rejected:
+there is no KEM flow in this release).
+
+- Generate implements RSA-3072/4096, Ed25519, X25519, and ML-DSA via
+  `00 47 00 <slot> AC{80 <alg> [+AA pin][+AB touch]}` with the generated
+  public key stored as `0x53{7F49{...} + 71 00 + FE}` (RSA `81/82`,
+  Ed/X `86`, ML-DSA `87`). ML-KEM gap-rejects with `not supported`
+  before any APDU.
+- Import implements RSA-3072/4096 (halves 192/256 bytes, tags `01-05`,
+  `e=65537`, two primes) and Ed25519/X25519 (tag `07`/`08`, 32-byte raw
+  seed). Supply `--in` as PEM/DER (PKCS #8 round-trips) or a raw 32-byte
+  seed as binary, hex, or base64. ML-DSA/ML-KEM have no import APDU and
+  gap-reject with `not supported` before any APDU.
+- Sign implements Ed25519 and ML-DSA over the raw message
+  (`00 87 <alg> <slot> 7C{82 empty, 81 msg}`). RSA-3072/4096 apply host-side
+  PKCS#1 v1.5 type-1 formatting so the challenge is exactly modulus-length
+  (384/512 bytes): a 32-byte message is DigestInfo-wrapped as SHA-256
+  (matching `--hash sha256`); any other length is type-1 padded raw
+  (matching `--hash none`). X25519 cannot sign:
+  `key sign` and `key challenge` reject with
+  `x25519 cannot sign: use ECDH` (exit 4). ML-KEM gap-rejects with `not supported`.
+- ECDH: `key challenge <slot> --challenge-hex <64 hex>` on an X25519 slot
+  runs `00 87 E1 <slot> 7C{82 empty, 85 peer}` and returns the 32-byte
+  shared secret (result kind `ecdh-secret`).
+- Certificates: RSA and Ed25519 use strict X.509 import. ML-DSA slots
+  require `cert import --raw-cert` to store raw bytes; without it the
+  import rejects with `post-quantum certificate requires --raw`. X25519
+  slots always reject with `no X.509 profile`, even with `--raw-cert`.
+- Public keys: Ed25519 exports standard PEM/DER. X25519 and ML-DSA/ML-KEM
+  are opaque and keep the PEM/DER gap; export their bytes with
+  `key public <slot> --format raw|base64|hex`.
+
+Attestation (`key attest`, INS `00 F9 <slot> 00`) and key/certificate
+delete work for all implemented algorithms. `key delete` also clears the
+slot object holding the stored public key template, so post-delete
+inspection reports the slot empty. The attestation slot (F9)
+stays read-only and rejects before any APDU.
+
+Certificate writes need management authentication on YubiKey/SafeNet
+tokens: `cert import` and `cert delete` accept `--mgm-stdin`/`--mgm-env`
+(or `PIV_MANAGEMENT_KEY`) like the key commands. Standard-transport tokens
+write without management credentials, preserving prior behavior.
+
 Prefer `--dry-run` when available. Use `--yes` only when your automation already validated the target device and credentials.
 
 ## Secret handling

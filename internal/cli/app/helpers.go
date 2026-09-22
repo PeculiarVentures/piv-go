@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
@@ -142,7 +143,12 @@ func SlotHex(slot piv.Slot) string {
 	return strings.ToLower(slot.String())
 }
 
-// ParseKeyAlgorithm resolves a key generation algorithm name.
+// ParseKeyAlgorithm resolves a key generation algorithm name. Names are
+// case-insensitive and accept rsa1024, rsa2048, rsa3072, rsa4096, eccp256,
+// eccp384 (with p256 and p384 aliases), ed25519, x25519, mldsa44, mldsa65,
+// mldsa87 (YubiKey 6 preview), and mlkem512, mlkem768, mlkem1024. ML-KEM
+// names parse successfully and gap-reject later without an APDU: there is no
+// KEM flow in this release.
 func ParseKeyAlgorithm(value string) (byte, string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "p256", "eccp256":
@@ -153,8 +159,28 @@ func ParseKeyAlgorithm(value string) (byte, string, error) {
 		return piv.AlgRSA1024, "rsa1024", nil
 	case "rsa2048":
 		return piv.AlgRSA2048, "rsa2048", nil
+	case "rsa3072":
+		return piv.AlgRSA3072, "rsa3072", nil
+	case "rsa4096":
+		return piv.AlgRSA4096, "rsa4096", nil
+	case "ed25519":
+		return piv.AlgEd25519, "ed25519", nil
+	case "x25519":
+		return piv.AlgX25519, "x25519", nil
+	case "mldsa44":
+		return piv.AlgMLDSA44, "mldsa44", nil
+	case "mldsa65":
+		return piv.AlgMLDSA65, "mldsa65", nil
+	case "mldsa87":
+		return piv.AlgMLDSA87, "mldsa87", nil
+	case "mlkem512":
+		return piv.AlgMLKEM512, "mlkem512", nil
+	case "mlkem768":
+		return piv.AlgMLKEM768, "mlkem768", nil
+	case "mlkem1024":
+		return piv.AlgMLKEM1024, "mlkem1024", nil
 	default:
-		return 0, "", UsageError(fmt.Sprintf("unsupported key algorithm %q", value), "use one of p256, p384, rsa1024, or rsa2048")
+		return 0, "", UsageError(fmt.Sprintf("unsupported key algorithm %q", value), "use one of p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mldsa44, mldsa65, mldsa87, mlkem512, mlkem768, or mlkem1024 (ml-dsa preview, ml-kem gap-rejects)")
 	}
 }
 
@@ -220,6 +246,47 @@ func parsePrivateKeyDER(data []byte) (crypto.PrivateKey, error) {
 		return key, nil
 	}
 	return nil, IOError("unable to parse private key input", "provide a PKCS #8, SEC 1, or PKCS #1 encoded private key", nil)
+}
+
+// ParsePrivateKeyForAlgorithm parses private key input for a key import with
+// algorithm context. Baseline algorithms use ParsePrivateKeyData directly.
+// Ed25519/X25519 first try the PEM/DER encodings (PKCS #8 round-trips for
+// both); when that fails they fall back to a raw 32-byte seed supplied as
+// binary, hex (64 characters), or base64 (44 characters), returned as
+// *piv.OpaquePrivateKey. Document the raw fallback for --in handling.
+func ParsePrivateKeyForAlgorithm(data []byte, algorithm byte) (crypto.PrivateKey, error) {
+	if algorithm != piv.AlgEd25519 && algorithm != piv.AlgX25519 {
+		return ParsePrivateKeyData(data)
+	}
+	if key, err := ParsePrivateKeyData(data); err == nil {
+		return key, nil
+	}
+	raw, err := parseRawSeed(data)
+	if err != nil {
+		return nil, IOError("unable to parse private key input", "provide a PKCS #8 private key or a raw 32-byte seed (binary, hex, or base64) for ed25519/x25519", err)
+	}
+	return &piv.OpaquePrivateKey{Algorithm: algorithm, Raw: raw}, nil
+}
+
+func parseRawSeed(data []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 32 {
+		return append([]byte(nil), trimmed...), nil
+	}
+	text := strings.TrimSpace(string(trimmed))
+	compact := strings.ReplaceAll(strings.ReplaceAll(text, " ", ""), "\n", "")
+	compact = strings.ReplaceAll(compact, "\t", "")
+	compact = strings.ReplaceAll(compact, "\r", "")
+	if decoded, err := hex.DecodeString(compact); err == nil && len(decoded) == 32 {
+		return decoded, nil
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(compact); err == nil && len(decoded) == 32 {
+		return decoded, nil
+	}
+	if decoded, err := base64.RawStdEncoding.DecodeString(compact); err == nil && len(decoded) == 32 {
+		return decoded, nil
+	}
+	return nil, fmt.Errorf("expected 32 raw seed bytes, got %d input bytes", len(trimmed))
 }
 
 // ParseManagementAlgorithm resolves a management-key algorithm name.
@@ -310,7 +377,7 @@ func InferPublicKeyAlgorithm(publicKey crypto.PublicKey) (byte, string, error) {
 		if bits <= 4096 {
 			return piv.AlgRSA4096, "rsa4096", nil
 		}
-		return 0, "", UnsupportedError("the selected slot uses an unsupported RSA key size", "use a slot backed by rsa1024 or rsa2048")
+		return 0, "", UnsupportedError("the selected slot uses an unsupported RSA key size", "use a slot backed by rsa1024, rsa2048, rsa3072, or rsa4096")
 	case *piv.OpaquePublicKey:
 		return inferOpaqueKeyAlgorithm(key.Algorithm, publicKey)
 	case piv.OpaquePublicKey:
@@ -328,6 +395,28 @@ func inferOpaqueKeyAlgorithm(algorithm byte, publicKey crypto.PublicKey) (byte, 
 		return algorithm, AlgorithmName(algorithm), nil
 	}
 	return 0, "", UnsupportedError(fmt.Sprintf("unsupported public key type %T", publicKey), "use piv key public to inspect the slot")
+}
+
+// ed25519OpaqueRaw extracts the 32-byte raw key from an Ed25519 opaque
+// public key in either pointer or value form.
+func ed25519OpaqueRaw(publicKey crypto.PublicKey) ([]byte, bool) {
+	var algorithm byte
+	var raw []byte
+	switch key := publicKey.(type) {
+	case *piv.OpaquePublicKey:
+		if key == nil {
+			return nil, false
+		}
+		algorithm, raw = key.Algorithm, key.Raw
+	case piv.OpaquePublicKey:
+		algorithm, raw = key.Algorithm, key.Raw
+	default:
+		return nil, false
+	}
+	if algorithm != piv.AlgEd25519 || len(raw) != 32 {
+		return nil, false
+	}
+	return append([]byte(nil), raw...), true
 }
 
 // opaquePublicKeyAlgorithm extracts the algorithm identifier from a YubiKey 6
@@ -386,13 +475,56 @@ func ParseCertificateData(data []byte) ([]byte, error) {
 	return append([]byte(nil), data...), nil
 }
 
+// ParseCertificateDataRaw accepts PEM or DER certificate input and returns
+// DER bytes without X.509 validation. Use it with --raw-cert for
+// post-quantum (ML-DSA) slot certificates that have no strict X.509 profile
+// in this release. X25519 slots have no X.509 profile at all and reject
+// certificate import even in raw mode.
+func ParseCertificateDataRaw(data []byte) ([]byte, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if strings.HasPrefix(trimmed, "-----BEGIN") {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			return nil, IOError("unable to parse PEM certificate", "provide a PEM or DER encoded certificate with --raw-cert", nil)
+		}
+		if len(block.Bytes) == 0 {
+			return nil, IOError("unable to parse certificate input", "provide a PEM or DER encoded certificate with --raw-cert", nil)
+		}
+		return append([]byte(nil), block.Bytes...), nil
+	}
+	raw := append([]byte(nil), bytes.TrimSpace(data)...)
+	if len(raw) == 0 {
+		return nil, IOError("unable to parse certificate input", "provide a PEM or DER encoded certificate with --raw-cert", nil)
+	}
+	return raw, nil
+}
+
 // EncodePublicKey serializes a public key as PEM or DER.
 //
-// Post-quantum YubiKey 6 keys (ML-DSA/ML-KEM) have no PEM/DER encoding here
-// and report an unsupported capability instead of panicking inside x509.
+// Post-quantum YubiKey 6 keys (ML-DSA/ML-KEM), X25519, and ambiguous opaque
+// keys have no PEM/DER encoding here and report an unsupported capability
+// instead of panicking inside x509. Ed25519 opaque keys (32-byte raw) encode
+// through the standard library.
 func EncodePublicKey(publicKey crypto.PublicKey, format string) ([]byte, error) {
 	if algorithm, ok := opaquePublicKeyAlgorithm(publicKey); ok && isPostQuantumAlgorithm(algorithm) {
-		return nil, UnsupportedError("the selected slot uses a post-quantum algorithm without PEM or DER encoding support", "use piv key public to inspect the slot")
+		return nil, UnsupportedError("the selected slot uses a post-quantum algorithm without PEM or DER encoding support", "use piv key public --format raw, base64, or hex for the opaque key bytes")
+	}
+	if raw, ok := ed25519OpaqueRaw(publicKey); ok {
+		der, err := x509.MarshalPKIXPublicKey(ed25519.PublicKey(raw))
+		if err != nil {
+			return nil, InternalError("unable to encode public key", "inspect the slot and retry", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(format)) {
+		case "", "pem":
+			return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
+		case "der":
+			return der, nil
+		default:
+			return nil, UsageError(fmt.Sprintf("unsupported public key format %q", format), "use pem or der")
+		}
+	}
+	if _, ok := opaquePublicKeyAlgorithm(publicKey); ok {
+		return nil, UnsupportedError("the selected slot uses an opaque key without PEM or DER encoding support", "use piv key public --format raw, base64, or hex for the opaque key bytes")
 	}
 	der, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil {

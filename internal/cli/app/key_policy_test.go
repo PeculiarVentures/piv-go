@@ -104,7 +104,8 @@ func TestParsePrivateKeyData(t *testing.T) {
 
 func TestKeyImportRejectsUnsupportedAlgorithm(t *testing.T) {
 	service := NewMutationService(nil, nil, bytes.NewReader(nil), &bytes.Buffer{})
-	_, err := service.KeyImport(context.Background(), KeyImportRequest{Slot: piv.SlotSignature, Algorithm: piv.AlgECCP384, AlgorithmName: "p384", Path: "missing.pem"})
+	// ML-KEM has no import flow and gap-rejects before reading input.
+	_, err := service.KeyImport(context.Background(), KeyImportRequest{Slot: piv.SlotSignature, Algorithm: piv.AlgMLKEM768, AlgorithmName: "mlkem768", Path: "missing.pem"})
 	if err == nil {
 		t.Fatal("expected error for unsupported import algorithm")
 	}

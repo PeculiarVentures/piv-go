@@ -32,15 +32,37 @@ func TestAlgorithmNameYubiKey6(t *testing.T) {
 	}
 }
 
-func TestParseKeyAlgorithmStaysClosed(t *testing.T) {
-	for _, name := range []string{"rsa3072", "rsa4096", "ed25519", "x25519", "mldsa44", "mldsa65", "mldsa87", "mlkem512", "mlkem768", "mlkem1024"} {
-		_, _, err := ParseKeyAlgorithm(name)
-		if err == nil {
-			t.Fatalf("ParseKeyAlgorithm(%q): expected UsageError, got nil", name)
+func TestParseKeyAlgorithmPQC(t *testing.T) {
+	tests := []struct {
+		name      string
+		algorithm byte
+		canonical string
+	}{
+		{name: "rsa3072", algorithm: piv.AlgRSA3072, canonical: "rsa3072"},
+		{name: "RSA4096", algorithm: piv.AlgRSA4096, canonical: "rsa4096"},
+		{name: "ed25519", algorithm: piv.AlgEd25519, canonical: "ed25519"},
+		{name: "X25519", algorithm: piv.AlgX25519, canonical: "x25519"},
+		{name: "mldsa44", algorithm: piv.AlgMLDSA44, canonical: "mldsa44"},
+		{name: "MLDSA65", algorithm: piv.AlgMLDSA65, canonical: "mldsa65"},
+		{name: "mldsa87", algorithm: piv.AlgMLDSA87, canonical: "mldsa87"},
+		{name: "mlkem512", algorithm: piv.AlgMLKEM512, canonical: "mlkem512"},
+		{name: "MLKEM768", algorithm: piv.AlgMLKEM768, canonical: "mlkem768"},
+		{name: "mlkem1024", algorithm: piv.AlgMLKEM1024, canonical: "mlkem1024"},
+		{name: "ECCP256", algorithm: piv.AlgECCP256, canonical: "p256"},
+		{name: "eccp384", algorithm: piv.AlgECCP384, canonical: "p384"},
+	}
+	for _, test := range tests {
+		algorithm, name, err := ParseKeyAlgorithm(test.name)
+		if err != nil {
+			t.Fatalf("ParseKeyAlgorithm(%q) error = %v", test.name, err)
 		}
-		cliErr, ok := err.(*CLIError)
-		if !ok || cliErr.Code != "usage-error" {
-			t.Fatalf("ParseKeyAlgorithm(%q): expected usage-error, got %#v", name, err)
+		if algorithm != test.algorithm || name != test.canonical {
+			t.Fatalf("ParseKeyAlgorithm(%q) = (0x%02X, %q), want (0x%02X, %q)", test.name, algorithm, name, test.algorithm, test.canonical)
+		}
+	}
+	for _, name := range []string{"rsa9999", "mldsa", "mlkem", "bogus"} {
+		if _, _, err := ParseKeyAlgorithm(name); err == nil {
+			t.Fatalf("ParseKeyAlgorithm(%q): expected UsageError, got nil", name)
 		}
 	}
 }
