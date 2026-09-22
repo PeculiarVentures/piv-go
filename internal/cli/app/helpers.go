@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -114,6 +115,70 @@ func ParseKeyAlgorithm(value string) (byte, string, error) {
 	default:
 		return 0, "", UsageError(fmt.Sprintf("unsupported key algorithm %q", value), "use one of p256, p384, rsa1024, or rsa2048")
 	}
+}
+
+// ParsePINPolicy resolves a slot PIN policy name to its YubiKey policy byte.
+// An empty value selects the default, which omits the policy tag so the
+// device applies its own default instead of preserving the slot's policy.
+func ParsePINPolicy(value string) (byte, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "default":
+		return piv.PinPolicyDefault, nil
+	case "never":
+		return piv.PinPolicyNever, nil
+	case "once":
+		return piv.PinPolicyOnce, nil
+	case "always":
+		return piv.PinPolicyAlways, nil
+	default:
+		return 0, UsageError(fmt.Sprintf("unsupported PIN policy %q", value), "use one of default, never, once, or always")
+	}
+}
+
+// ParseTouchPolicy resolves a slot touch policy name to its YubiKey policy byte.
+// An empty value selects the default, which omits the policy tag so the
+// device applies its own default instead of preserving the slot's policy.
+func ParseTouchPolicy(value string) (byte, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "default":
+		return piv.TouchPolicyDefault, nil
+	case "never":
+		return piv.TouchPolicyNever, nil
+	case "always":
+		return piv.TouchPolicyAlways, nil
+	case "cached":
+		return piv.TouchPolicyCached, nil
+	default:
+		return 0, UsageError(fmt.Sprintf("unsupported touch policy %q", value), "use one of default, never, always, or cached")
+	}
+}
+
+// ParsePrivateKeyData accepts PEM or DER private key input and returns the
+// parsed private key. PKCS #8, SEC 1 EC, and PKCS #1 RSA encodings are
+// supported.
+func ParsePrivateKeyData(data []byte) (crypto.PrivateKey, error) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.HasPrefix(trimmed, []byte("-----BEGIN")) {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			return nil, IOError("unable to parse PEM private key", "provide a PEM or DER encoded private key", nil)
+		}
+		return parsePrivateKeyDER(block.Bytes)
+	}
+	return parsePrivateKeyDER(data)
+}
+
+func parsePrivateKeyDER(data []byte) (crypto.PrivateKey, error) {
+	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParseECPrivateKey(data); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(data); err == nil {
+		return key, nil
+	}
+	return nil, IOError("unable to parse private key input", "provide a PKCS #8, SEC 1, or PKCS #1 encoded private key", nil)
 }
 
 // ParseManagementAlgorithm resolves a management-key algorithm name.

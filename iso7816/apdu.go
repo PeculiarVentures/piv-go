@@ -12,10 +12,28 @@ type Command struct {
 	Le   int // expected response length; -1 means no Le field
 }
 
-// Bytes encodes the command APDU into a byte slice.
+// Bytes encodes the command APDU into a byte slice. Payloads larger than 255
+// bytes use extended-length encoding; shorter commands keep the classic
+// short-APDU form byte-for-byte.
 func (c *Command) Bytes() []byte {
 	header := []byte{c.Cla, c.Ins, c.P1, c.P2}
 	dataLen := len(c.Data)
+
+	if dataLen > 0xFF {
+		buf := make([]byte, 0, 7+dataLen+2)
+		buf = append(buf, header...)
+		buf = append(buf, 0x00, byte(dataLen>>8), byte(dataLen))
+		buf = append(buf, c.Data...)
+		if c.Le >= 0 {
+			le := c.Le
+			if le <= 0 || le > 0xFFFF {
+				// 00 00 encodes the maximum extended Le of 65536.
+				le = 0
+			}
+			buf = append(buf, byte(le>>8), byte(le))
+		}
+		return buf
+	}
 
 	if dataLen == 0 && c.Le < 0 {
 		// Case 1: no data, no Le
@@ -80,6 +98,49 @@ func ParseCommand(raw []byte) (*Command, error) {
 		}
 		cmd.Le = le
 		return cmd, nil
+	}
+
+	if raw[4] == 0x00 {
+		// Extended-length APDU: 00 LcHi LcLo, or case 2E with two-byte Le.
+		if len(raw) == 7 {
+			// Case 2E: no data, the two bytes after 0x00 are Le.
+			le := int(raw[5])<<8 | int(raw[6])
+			if le == 0 {
+				le = 65536
+			}
+			cmd.Le = le
+			return cmd, nil
+		}
+		if len(raw) >= 7 {
+			lc := int(raw[5])<<8 | int(raw[6])
+			if len(raw) < 7+lc {
+				return nil, fmt.Errorf("iso7816: data length mismatch: Lc=%d, available=%d", lc, len(raw)-7)
+			}
+			cmd.Data = make([]byte, lc)
+			copy(cmd.Data, raw[7:7+lc])
+			rest := raw[7+lc:]
+			if len(rest) == 0 {
+				return cmd, nil
+			}
+			if len(rest) == 2 {
+				le := int(rest[0])<<8 | int(rest[1])
+				if le == 0 {
+					le = 65536
+				}
+				cmd.Le = le
+				return cmd, nil
+			}
+			return nil, fmt.Errorf("iso7816: unexpected command length %d", len(raw))
+		}
+		if len(raw) == 6 {
+			le := int(raw[5])
+			if le == 0 {
+				le = 256
+			}
+			cmd.Le = le
+			return cmd, nil
+		}
+		return nil, fmt.Errorf("iso7816: unexpected command length %d", len(raw))
 	}
 
 	lc := int(raw[4])

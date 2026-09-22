@@ -83,11 +83,18 @@ Treat these commands as state-changing operations:
 - `cert import`
 - `cert delete`
 - `key generate`
+- `key import`
 - `key delete`
 - `mgm rotate`
 - `setup init`
 - `setup reset`
 - `setup reset-slot`
+
+YubiKey slot policies: `key generate` and `key import` accept
+`--pin-policy never|once|always` and `--touch-policy never|always|cached`
+(default omits the policy tags, so the device applies its own defaults instead
+of preserving the slot's previous policies). `mgm rotate` accepts `--touch`
+to require touch confirmation for management operations.
 
 Prefer `--dry-run` when available. Use `--yes` only when your automation already validated the target device and credentials.
 

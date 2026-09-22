@@ -73,6 +73,8 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	var generateAlgorithm string
 	var generateMGMStdin bool
 	var generateMGMEnv string
+	var generatePinPolicy string
+	var generateTouchPolicy string
 	var generateDryRun bool
 	generate := &cobra.Command{
 		Use:   "generate <slot>",
@@ -87,12 +89,22 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			pinPolicy, err := app.ParsePINPolicy(generatePinPolicy)
+			if err != nil {
+				return err
+			}
+			touchPolicy, err := app.ParseTouchPolicy(generateTouchPolicy)
+			if err != nil {
+				return err
+			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
 				return c.mutations.KeyGenerate(ctx, app.KeyGenerateRequest{
 					Global:        global,
 					Slot:          slot,
 					Algorithm:     algorithm,
 					AlgorithmName: algorithmName,
+					PinPolicy:     pinPolicy,
+					TouchPolicy:   touchPolicy,
 					ManagementKey: secretRequest("management key", "Enter management key: ", generateMGMEnv, "PIV_MANAGEMENT_KEY", generateMGMStdin),
 					DryRun:        generateDryRun,
 				})
@@ -103,6 +115,8 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	_ = generate.MarkFlagRequired("alg")
 	generate.Flags().BoolVar(&generateMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	generate.Flags().StringVar(&generateMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
+	generate.Flags().StringVar(&generatePinPolicy, "pin-policy", "", "Slot PIN policy: never, once, or always (default omits the tag; the device applies its own default)")
+	generate.Flags().StringVar(&generateTouchPolicy, "touch-policy", "", "Slot touch policy: never, always, or cached (default omits the tag; the device applies its own default)")
 	generate.Flags().BoolVar(&generateDryRun, "dry-run", false, "Show the planned action without mutating the token")
 
 	var publicFormat string
@@ -220,6 +234,59 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	challenge.Flags().BoolVar(&challengePINStdin, "pin-stdin", false, "Read the PIN from stdin before authentication")
 	challenge.Flags().StringVar(&challengePINEnv, "pin-env", "", "Read the PIN from the specified environment variable")
 
-	command.AddCommand(generate, public, deleteCommand, sign, challenge)
+	var importAlgorithm string
+	var importPath string
+	var importMGMStdin bool
+	var importMGMEnv string
+	var importPinPolicy string
+	var importTouchPolicy string
+	var importDryRun bool
+	importKey := &cobra.Command{
+		Use:   "import <slot>",
+		Short: "Import a private key into a slot",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slot, err := app.ParseSlot(args[0])
+			if err != nil {
+				return err
+			}
+			algorithm, algorithmName, err := app.ParseKeyAlgorithm(importAlgorithm)
+			if err != nil {
+				return err
+			}
+			pinPolicy, err := app.ParsePINPolicy(importPinPolicy)
+			if err != nil {
+				return err
+			}
+			touchPolicy, err := app.ParseTouchPolicy(importTouchPolicy)
+			if err != nil {
+				return err
+			}
+			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				return c.mutations.KeyImport(ctx, app.KeyImportRequest{
+					Global:        global,
+					Slot:          slot,
+					Algorithm:     algorithm,
+					AlgorithmName: algorithmName,
+					Path:          importPath,
+					PinPolicy:     pinPolicy,
+					TouchPolicy:   touchPolicy,
+					ManagementKey: secretRequest("management key", "Enter management key: ", importMGMEnv, "PIV_MANAGEMENT_KEY", importMGMStdin),
+					DryRun:        importDryRun,
+				})
+			})
+		},
+	}
+	importKey.Flags().StringVar(&importAlgorithm, "alg", "", "Key algorithm: p256 or rsa2048")
+	_ = importKey.MarkFlagRequired("alg")
+	importKey.Flags().StringVar(&importPath, "in", "", "Read the private key from a PEM or DER file")
+	_ = importKey.MarkFlagRequired("in")
+	importKey.Flags().BoolVar(&importMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
+	importKey.Flags().StringVar(&importMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
+	importKey.Flags().StringVar(&importPinPolicy, "pin-policy", "", "Slot PIN policy: never, once, or always (default omits the tag; the device applies its own default)")
+	importKey.Flags().StringVar(&importTouchPolicy, "touch-policy", "", "Slot touch policy: never, always, or cached (default omits the tag; the device applies its own default)")
+	importKey.Flags().BoolVar(&importDryRun, "dry-run", false, "Show the planned action without mutating the token")
+
+	command.AddCommand(generate, public, deleteCommand, sign, challenge, importKey)
 	return command
 }

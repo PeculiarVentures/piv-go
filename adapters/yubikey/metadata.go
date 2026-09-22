@@ -35,8 +35,24 @@ func (a *Adapter) ManagementKeyAlgorithm(session *adapters.Session, key []byte) 
 	}
 }
 
+// Version returns the YubiKey firmware version string (for example "5.7.0").
+func (a *Adapter) Version(session *adapters.Session) (string, error) {
+	if err := requireSessionClient(session); err != nil {
+		return "", err
+	}
+	session.Observe(adapters.LogLevelDebug, a, "read-version", "reading YubiKey firmware version")
+	return readVersion(session.Client)
+}
+
 // ChangeManagementKey updates the active YubiKey management key.
 func (a *Adapter) ChangeManagementKey(session *adapters.Session, newAlgorithm byte, newKey []byte) error {
+	return a.ChangeManagementKeyWithTouch(session, newAlgorithm, newKey, false)
+}
+
+// ChangeManagementKeyWithTouch updates the active YubiKey management key,
+// requesting touch confirmation for management operations when requireTouch
+// is true.
+func (a *Adapter) ChangeManagementKeyWithTouch(session *adapters.Session, newAlgorithm byte, newKey []byte, requireTouch bool) error {
 	if err := requireSessionClient(session); err != nil {
 		return err
 	}
@@ -54,7 +70,7 @@ func (a *Adapter) ChangeManagementKey(session *adapters.Session, newAlgorithm by
 		return fmt.Errorf("authenticate current management key: %w", err)
 	}
 	session.Observe(adapters.LogLevelInfo, a, "change-management-key", "writing YubiKey management key metadata and value")
-	if err := setManagementKey(session.Client, newAlgorithm, newKey, false); err != nil {
+	if err := setManagementKey(session.Client, newAlgorithm, newKey, requireTouch); err != nil {
 		return err
 	}
 	session.Observe(adapters.LogLevelDebug, a, "change-management-key", "verifying the new management key")
