@@ -3,6 +3,9 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -37,6 +40,21 @@ type KeyGenerateRequest struct {
 	Slot          piv.Slot
 	Algorithm     byte
 	AlgorithmName string
+	PinPolicy     byte
+	TouchPolicy   byte
+	ManagementKey SecretRequest
+	DryRun        bool
+}
+
+// KeyImportRequest configures piv key import.
+type KeyImportRequest struct {
+	Global        GlobalOptions
+	Slot          piv.Slot
+	Algorithm     byte
+	AlgorithmName string
+	Path          string
+	PinPolicy     byte
+	TouchPolicy   byte
 	ManagementKey SecretRequest
 	DryRun        bool
 }
@@ -108,6 +126,7 @@ type MGMRotateRequest struct {
 	AlgorithmName    string
 	NewAlgorithm     byte
 	NewAlgorithmName string
+	RequireTouch     bool
 	Yes              bool
 	DryRun           bool
 }
@@ -254,12 +273,86 @@ func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRe
 	if err := target.Runtime.AuthenticateManagementKey(); err != nil {
 		return Response{}, err
 	}
-	if _, err := generateKeyPair(target.Runtime, request.Slot, request.Algorithm); err != nil {
+	if _, err := generateKeyPairWithPolicies(target.Runtime, request.Slot, request.Algorithm, request.PinPolicy, request.TouchPolicy); err != nil {
 		return Response{}, err
 	}
 	response := Response{Command: "key-generate", Target: target.Summary, Result: MutationResult{Action: "key-generate", Changed: true, Algorithm: request.AlgorithmName}}
 	response.traceLines = target.TraceLines()
 	return response, nil
+}
+
+// KeyImport imports a private key into a slot.
+func (s *MutationService) KeyImport(ctx context.Context, request KeyImportRequest) (Response, error) {
+	if request.Algorithm != piv.AlgECCP256 && request.Algorithm != piv.AlgRSA2048 {
+		return Response{}, UsageError(fmt.Sprintf("unsupported import algorithm %q", request.AlgorithmName), "use p256 or rsa2048")
+	}
+	inputData, err := ReadInputFile(request.Path, s.input)
+	if err != nil {
+		return Response{}, err
+	}
+	privateKey, err := ParsePrivateKeyData(inputData)
+	if err != nil {
+		return Response{}, err
+	}
+	if err := checkImportKeyMatch(request.Algorithm, privateKey); err != nil {
+		return Response{}, err
+	}
+	resolver := s.resolver(request.Global)
+	target, err := s.targets.Resolve(ctx, request.Global)
+	if err != nil {
+		return Response{}, err
+	}
+	defer func() { _ = target.Close() }()
+
+	algorithmName, err := s.setManagementCredentials(target.Runtime, resolver, request.ManagementKey, 0)
+	if err != nil {
+		return Response{}, err
+	}
+	plan := s.planner.Build(
+		fmt.Sprintf("import a %s key into slot %s", request.AlgorithmName, SlotName(request.Slot)),
+		[]string{fmt.Sprintf("management key (%s)", algorithmName)},
+		[]string{fmt.Sprintf("replace the key material in slot %s", SlotName(request.Slot))},
+		nil,
+	)
+	if request.DryRun {
+		response := Response{Command: "key-import", Target: target.Summary, Result: MutationResult{Action: "key-import", DryRun: true, Plan: plan, Algorithm: request.AlgorithmName}}
+		response.traceLines = target.TraceLines()
+		return response, nil
+	}
+	if err := target.Runtime.AuthenticateManagementKey(); err != nil {
+		return Response{}, err
+	}
+	if err := importKeyPair(target.Runtime, request.Slot, request.Algorithm, privateKey, request.PinPolicy, request.TouchPolicy); err != nil {
+		return Response{}, err
+	}
+	response := Response{Command: "key-import", Target: target.Summary, Result: MutationResult{Action: "key-import", Changed: true, Algorithm: request.AlgorithmName}}
+	response.traceLines = target.TraceLines()
+	return response, nil
+}
+
+func checkImportKeyMatch(algorithm byte, privateKey crypto.PrivateKey) error {
+	switch algorithm {
+	case piv.AlgECCP256:
+		key, ok := privateKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return UsageError(fmt.Sprintf("import key type mismatch: p256 requires an EC private key, got %T", privateKey), "provide a P-256 private key for --alg p256")
+		}
+		if key.Curve.Params().BitSize != 256 {
+			return UsageError("import key type mismatch: p256 requires a P-256 private key", "provide a P-256 private key for --alg p256")
+		}
+		return nil
+	case piv.AlgRSA2048:
+		key, ok := privateKey.(*rsa.PrivateKey)
+		if !ok {
+			return UsageError(fmt.Sprintf("import key type mismatch: rsa2048 requires an RSA private key, got %T", privateKey), "provide an RSA-2048 private key for --alg rsa2048")
+		}
+		if key.N.BitLen() != 2048 {
+			return UsageError(fmt.Sprintf("import key type mismatch: rsa2048 requires a 2048-bit key, got %d bits", key.N.BitLen()), "provide an RSA-2048 private key for --alg rsa2048")
+		}
+		return nil
+	default:
+		return UsageError("unsupported import algorithm", "use p256 or rsa2048")
+	}
 }
 
 // KeyDelete deletes a slot key.
@@ -556,7 +649,7 @@ func (s *MutationService) MGMRotate(ctx context.Context, request MGMRotateReques
 	if err := s.planner.Confirm(plan, request.Global.NonInteractive, request.Yes); err != nil {
 		return Response{}, err
 	}
-	if err := adaptersadmin.ChangeManagementKey(target.Runtime, request.NewAlgorithm, newKey); err != nil {
+	if err := adaptersadmin.ChangeManagementKeyWithTouch(target.Runtime, request.NewAlgorithm, newKey, request.RequireTouch); err != nil {
 		return Response{}, err
 	}
 	response := Response{Command: "mgm-rotate", Target: target.Summary, Result: MutationResult{Action: "mgm-rotate", Changed: true, Algorithm: request.NewAlgorithmName}}

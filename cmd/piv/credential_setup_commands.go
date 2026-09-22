@@ -156,6 +156,7 @@ func (c *cli) newManagementCommand() *cobra.Command {
 	var rotateNewEnv string
 	var rotateAlgorithm string
 	var rotateNewAlgorithm string
+	var rotateTouch bool
 	var rotateYes bool
 	var rotateDryRun bool
 	rotate := &cobra.Command{
@@ -180,6 +181,7 @@ func (c *cli) newManagementCommand() *cobra.Command {
 					AlgorithmName:    algorithmName,
 					NewAlgorithm:     newAlgorithm,
 					NewAlgorithmName: newAlgorithmName,
+					RequireTouch:     rotateTouch,
 					Yes:              rotateYes,
 					DryRun:           rotateDryRun,
 				})
@@ -192,6 +194,7 @@ func (c *cli) newManagementCommand() *cobra.Command {
 	rotate.Flags().StringVar(&rotateNewEnv, "new-env", "", "Read the new management key from the specified environment variable")
 	rotate.Flags().StringVar(&rotateAlgorithm, "alg", "auto", "Current management key algorithm: auto, 3des, aes128, aes192, or aes256")
 	rotate.Flags().StringVar(&rotateNewAlgorithm, "new-alg", "", "New management key algorithm: 3des, aes128, aes192, or aes256")
+	rotate.Flags().BoolVar(&rotateTouch, "touch", false, "Require touch confirmation for management operations")
 	rotate.Flags().BoolVarP(&rotateYes, "yes", "y", false, "Skip the destructive-operation confirmation")
 	rotate.Flags().BoolVar(&rotateDryRun, "dry-run", false, "Show the planned action without mutating the token")
 

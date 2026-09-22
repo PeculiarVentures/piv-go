@@ -48,6 +48,17 @@ type CredentialAdapter interface {
 	ChangeManagementKey(session *Session, newAlgorithm byte, newKey []byte) error
 }
 
+// ManagementKeyTouchAdapter exposes management key rotation with an explicit
+// touch-requirement flag. It extends CredentialAdapter without changing it:
+// adapters that only implement CredentialAdapter keep the non-touch behavior.
+type ManagementKeyTouchAdapter interface {
+	// ChangeManagementKeyWithTouch rotates the management key using the
+	// session's current management credentials and the new key material,
+	// requiring touch confirmation for management operations when
+	// requireTouch is true.
+	ChangeManagementKeyWithTouch(session *Session, newAlgorithm byte, newKey []byte, requireTouch bool) error
+}
+
 // ManagementKeyAlgorithmAdapter resolves the algorithm used for ambiguous
 // management key encodings such as 24-byte YubiKey management keys.
 type ManagementKeyAlgorithmAdapter interface {

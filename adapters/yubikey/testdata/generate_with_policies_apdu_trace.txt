@@ -1,0 +1,8 @@
+APDU -> 00 87 03 9b 04 7c 02 81 00 00
+APDU <- 7c 0a 81 08 10 32 54 76 98 ba dc fe 90 00
+APDU -> 00 87 03 9b 0c 7c 0a 82 08 40 f2 22 e2 d1 bd 0f 06 00
+APDU <- 90 00
+APDU -> 00 47 00 9c 0b ac 09 80 01 11 aa 01 02 ab 01 03 00
+APDU <- 7f 49 43 86 41 04 6b 17 d1 f2 e1 2c 42 47 f8 bc e6 e5 63 a4 40 f2 77 03 7d 81 2d eb 33 a0 f4 a1 39 45 d8 98 c2 96 4f e3 42 e2 fe 1a 7f 9b 8e e7 eb 4a 7c 0f 9e 16 2b ce 33 57 6b 31 5e ce cb b6 40 68 37 bf 51 f5 90 00
+APDU -> 00 db 3f ff 52 5c 03 5f c1 0a 53 4b 7f 49 43 86 41 04 6b 17 d1 f2 e1 2c 42 47 f8 bc e6 e5 63 a4 40 f2 77 03 7d 81 2d eb 33 a0 f4 a1 39 45 d8 98 c2 96 4f e3 42 e2 fe 1a 7f 9b 8e e7 eb 4a 7c 0f 9e 16 2b ce 33 57 6b 31 5e ce cb b6 40 68 37 bf 51 f5 71 01 00 fe 00 00
+APDU <- 90 00

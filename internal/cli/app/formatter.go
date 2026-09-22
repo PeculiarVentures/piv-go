@@ -337,6 +337,11 @@ func (f *Formatter) mutationSummary(result MutationResult, target TargetSummary)
 		return "key generated"
 	case "key-delete":
 		return "key deleted"
+	case "key-import":
+		if result.Algorithm != "" {
+			return fmt.Sprintf("key imported (%s)", result.Algorithm)
+		}
+		return "key imported"
 	case "pin-change":
 		return "PIN changed"
 	case "pin-unblock":

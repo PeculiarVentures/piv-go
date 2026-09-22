@@ -39,6 +39,16 @@ func clearCertificate(runtime *adapters.Runtime, slot piv.Slot) error {
 }
 
 func generateKeyPair(runtime *adapters.Runtime, slot piv.Slot, algorithm byte) (crypto.PublicKey, error) {
+	return generateKeyPairWithPolicies(runtime, slot, algorithm, piv.PinPolicyDefault, piv.TouchPolicyDefault)
+}
+
+func generateKeyPairWithPolicies(runtime *adapters.Runtime, slot piv.Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error) {
+	if generator, ok := runtime.Adapter.(adapters.KeyGenerationPolicyAdapter); ok {
+		return generator.GenerateKey(runtime.Session, slot, algorithm, pinPolicy, touchPolicy)
+	}
+	if pinPolicy != piv.PinPolicyDefault || touchPolicy != piv.TouchPolicyDefault {
+		return nil, UnsupportedError("PIN/touch policies are not supported on the selected token", "use default policies or select a YubiKey token")
+	}
 	if generator, ok := runtime.Adapter.(adapters.KeyGenerationAdapter); ok {
 		if err := generator.PrepareGenerateKey(runtime.Session, slot, algorithm); err != nil {
 			return nil, err
@@ -54,6 +64,13 @@ func generateKeyPair(runtime *adapters.Runtime, slot piv.Slot, algorithm byte) (
 		}
 	}
 	return publicKey, nil
+}
+
+func importKeyPair(runtime *adapters.Runtime, slot piv.Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
+	if importer, ok := runtime.Adapter.(adapters.KeyImportAdapter); ok {
+		return importer.ImportKey(runtime.Session, slot, algorithm, privateKey, pinPolicy, touchPolicy)
+	}
+	return runtime.Session.Client.ImportKey(slot, algorithm, privateKey, pinPolicy, touchPolicy)
 }
 
 func deleteKeyPair(runtime *adapters.Runtime, slot piv.Slot) error {
