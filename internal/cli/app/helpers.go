@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/PeculiarVentures/piv-go/adapters/yubikey"
 	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
@@ -59,10 +60,18 @@ var objectNameMap = func() map[string]uint {
 }()
 
 // ParseSlot resolves a canonical or hexadecimal slot selector.
+//
+// The YubiKey attestation aliases "attestation" and "f9" resolve to the
+// vendor attestation slot (0xF9) served from the attestation certificate
+// object; use them with piv cert export to read the long-lived attestation
+// certificate.
 func ParseSlot(value string) (piv.Slot, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	if slot, ok := slotNameMap[normalized]; ok {
 		return slot, nil
+	}
+	if normalized == "attestation" || normalized == "f9" {
+		return yubikey.SlotAttestation, nil
 	}
 	normalized = strings.TrimPrefix(normalized, "0x")
 	parsed, err := strconv.ParseUint(normalized, 16, 8)
@@ -71,7 +80,7 @@ func ParseSlot(value string) (piv.Slot, error) {
 	}
 	slot := piv.Slot(parsed)
 	switch slot {
-	case piv.SlotAuthentication, piv.SlotManagement, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth:
+	case piv.SlotAuthentication, piv.SlotManagement, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth, yubikey.SlotAttestation:
 		return slot, nil
 	default:
 		return 0, UsageError(fmt.Sprintf("unsupported slot %q", value), "use auth, sign, key-mgmt, card-auth, or a hexadecimal alias such as 9a")

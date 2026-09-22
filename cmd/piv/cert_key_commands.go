@@ -138,6 +138,25 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	public.Flags().StringVar(&publicFormat, "format", "", "Export format: pem or der")
 	public.Flags().StringVarP(&publicOut, "out", "o", "", "Write the public key to a file")
 
+	var attestFormat string
+	var attestOut string
+	attest := &cobra.Command{
+		Use:   "attest <slot>",
+		Short: "Attest a slot key and export its attestation certificate",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slot, err := app.ParseSlot(args[0])
+			if err != nil {
+				return err
+			}
+			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				return c.info.Attest(ctx, app.ExportRequest{Global: global, Slot: slot, Format: attestFormat, Out: attestOut})
+			})
+		},
+	}
+	attest.Flags().StringVar(&attestFormat, "format", "", "Export format: pem or der")
+	attest.Flags().StringVarP(&attestOut, "out", "o", "", "Write the attestation certificate to a file")
+
 	var deleteMGMStdin bool
 	var deleteMGMEnv string
 	var deleteYes bool
@@ -287,6 +306,6 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	importKey.Flags().StringVar(&importTouchPolicy, "touch-policy", "", "Slot touch policy: never, always, or cached (default omits the tag; the device applies its own default)")
 	importKey.Flags().BoolVar(&importDryRun, "dry-run", false, "Show the planned action without mutating the token")
 
-	command.AddCommand(generate, public, deleteCommand, sign, challenge, importKey)
+	command.AddCommand(generate, public, attest, deleteCommand, sign, challenge, importKey)
 	return command
 }

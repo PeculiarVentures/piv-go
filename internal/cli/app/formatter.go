@@ -407,6 +407,8 @@ func artifactLabel(kind string) string {
 		return "certificate"
 	case "public-key":
 		return "public key"
+	case "attestation":
+		return "attestation certificate"
 	case "signature":
 		return "signature"
 	case "challenge-response":

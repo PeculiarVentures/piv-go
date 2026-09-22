@@ -80,6 +80,13 @@ func deleteKeyPair(runtime *adapters.Runtime, slot piv.Slot) error {
 	return UnsupportedError("key deletion is not supported on the selected token", "inspect capabilities with piv info")
 }
 
+func attestKey(runtime *adapters.Runtime, slot piv.Slot) ([]byte, error) {
+	if attester, ok := runtime.Adapter.(adapters.KeyAttestationAdapter); ok {
+		return attester.AttestKey(runtime.Session, slot)
+	}
+	return nil, UnsupportedError("key attestation is not supported on the selected token", "inspect capabilities with piv info")
+}
+
 func describeSlot(runtime *adapters.Runtime, slot piv.Slot) (SlotView, error) {
 	description, err := adapterslots.DescribeSlot(runtime, slot)
 	if err != nil {

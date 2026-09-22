@@ -89,5 +89,6 @@ func (a *Adapter) Capabilities() adapters.CapabilityReport {
 		adapters.CapabilityReadTokenLabel:      {Support: adapters.CapabilityVendor, Notes: "uses YubiKey serial to generate token label"},
 		adapters.CapabilityChangeManagementKey: {Notes: "uses YubiKey SET MANAGEMENT KEY command"},
 		adapters.CapabilityResetToken:          {Notes: "blocks PIN and PUK before issuing YubiKey reset"},
+		adapters.CapabilityAttestKey:           {Support: adapters.CapabilityVendor, Notes: "uses YubiKey ATTEST KEY on firmware 4.3.0+"},
 	})
 }

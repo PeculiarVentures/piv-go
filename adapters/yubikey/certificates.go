@@ -8,9 +8,15 @@ import (
 )
 
 // ReadCertificate reads a certificate from the slot using the standard PIV object.
+//
+// The YubiKey attestation slot (0xF9) is served from the vendor attestation
+// object (0x5FFF01) holding the long-lived attestation certificate.
 func (a *Adapter) ReadCertificate(session *adapters.Session, slot piv.Slot) ([]byte, error) {
 	if err := requireSessionClient(session); err != nil {
 		return nil, err
+	}
+	if slot == SlotAttestation {
+		return a.AttestationCertificate(session)
 	}
 	return session.Client.ReadCertificate(slot)
 }
