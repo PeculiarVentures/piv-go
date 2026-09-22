@@ -117,6 +117,12 @@ func TestYubiKeyAdapterAttestKeyRequiresFirmware430(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "requires 4.3.0 or later") {
 				t.Fatalf("version %v expected firmware requirement error, got %v", test.version, err)
 			}
+			// The message must stay recognizable to the CLI ErrorMapper
+			// ("not supported") so old firmware maps to
+			// unsupported-capability instead of internal-error.
+			if !strings.Contains(strings.ToLower(err.Error()), "not supported") {
+				t.Fatalf("version %v firmware error must contain %q for error mapping, got %v", test.version, "not supported", err)
+			}
 			if findCommand(mock, 0xF9) != nil {
 				t.Fatalf("version %v must not send ATTEST KEY below the minimum firmware", test.version)
 			}

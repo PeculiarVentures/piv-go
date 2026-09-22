@@ -300,6 +300,9 @@ func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Res
 // format. Attestation is a read-only vendor operation: tokens without a
 // KeyAttestationAdapter report it as unsupported.
 func (s *InfoService) Attest(ctx context.Context, request ExportRequest) (Response, error) {
+	if isAttestationSlot(request.Slot) {
+		return Response{}, UnsupportedError("attestation is not supported for slot F9", "attest one of auth, sign, key-mgmt, or card-auth")
+	}
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err

@@ -59,6 +59,8 @@ piv cert export attestation --reader "YubiKey 5C NFC" --out attest-ca.pem
 was generated on a YubiKey (firmware 4.3.0+, slots 9A/9C/9D/9E).
 `cert export attestation` (alias `f9`) reads the long-lived attestation
 certificate from the YubiKey attestation object instead of a slot object.
+The attestation slot (F9) is read-only: key and certificate mutation commands
+reject it before touching the token to protect the factory attestation key.
 
 Use credentialed operations safely:
 

@@ -34,7 +34,7 @@ func (c *cli) newCertCommand() *cobra.Command {
 		Short: "Import a certificate into a slot",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}
@@ -51,7 +51,7 @@ func (c *cli) newCertCommand() *cobra.Command {
 		Short: "Delete a slot certificate",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Generate a new key in a slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}
@@ -166,7 +166,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Delete a slot key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}
@@ -191,7 +191,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Sign input data with a slot key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}
@@ -228,7 +228,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Run GENERAL AUTHENTICATE with a supplied challenge",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}
@@ -265,7 +265,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Import a private key into a slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}

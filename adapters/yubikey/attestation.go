@@ -57,7 +57,7 @@ func (a *Adapter) AttestKey(session *adapters.Session, slot piv.Slot) ([]byte, e
 		return nil, fmt.Errorf("yubikey: parse firmware version %q for attestation: %w", version, err)
 	}
 	if !supported {
-		return nil, fmt.Errorf("yubikey: firmware %s does not support key attestation, requires %s or later", version, attestationMinVersion)
+		return nil, fmt.Errorf("yubikey: firmware %s is not supported for key attestation, requires %s or later", version, attestationMinVersion)
 	}
 	session.Observe(adapters.LogLevelDebug, a, "attest-key", "issuing YubiKey ATTEST KEY for %s", slot)
 	cmd := &iso7816.Command{

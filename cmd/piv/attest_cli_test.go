@@ -113,3 +113,37 @@ func TestCertExportAttestationAliasJSONWithFakeReader(t *testing.T) {
 		t.Fatalf("expected PEM certificate in cert output, got %q", result.Data)
 	}
 }
+
+func TestKeyGenerateRejectsAttestationSlotWithoutAPDU(t *testing.T) {
+	card := newReadyCard().(*emulator.Card)
+	targets := app.NewTargetResolver(fakeCardContextFactory{
+		builders: map[string]func() piv.Card{
+			"YubiKey Test": func() piv.Card { return card },
+		},
+	}, nil, bytes.NewReader(nil), &bytes.Buffer{})
+	cli, _, _ := newTestCLI(t, targets, bytes.NewReader(nil))
+	err := executeCLI(cli, "key", "generate", "f9", "--alg", "p256", "--reader", "YubiKey Test")
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("expected read-only F9 rejection, got %v", err)
+	}
+	if len(card.TransmittedCommands) != 0 {
+		t.Fatalf("rejected F9 generate must not send any APDU, got % X", card.TransmittedCommands)
+	}
+}
+
+func TestCertImportRejectsAttestationSlotWithoutAPDU(t *testing.T) {
+	card := newReadyCard().(*emulator.Card)
+	targets := app.NewTargetResolver(fakeCardContextFactory{
+		builders: map[string]func() piv.Card{
+			"YubiKey Test": func() piv.Card { return card },
+		},
+	}, nil, bytes.NewReader(nil), &bytes.Buffer{})
+	cli, _, _ := newTestCLI(t, targets, bytes.NewReader(nil))
+	err := executeCLI(cli, "cert", "import", "attestation", "/nonexistent-cert.pem", "--reader", "YubiKey Test")
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("expected read-only F9 rejection, got %v", err)
+	}
+	if len(card.TransmittedCommands) != 0 {
+		t.Fatalf("rejected F9 cert import must not send any APDU, got % X", card.TransmittedCommands)
+	}
+}
