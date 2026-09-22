@@ -54,3 +54,51 @@ func TestParseCommandShortFormsUnchanged(t *testing.T) {
 		t.Fatalf("case 4 parse changed: %+v, %v", parsed, err)
 	}
 }
+
+func TestParseCommandExtendedCase2E(t *testing.T) {
+	tests := []struct {
+		name   string
+		raw    []byte
+		wantLe int
+	}{
+		{name: "Le 256", raw: []byte{0x00, 0xC0, 0x00, 0x00, 0x00, 0x01, 0x00}, wantLe: 256},
+		{name: "Le 1", raw: []byte{0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x01}, wantLe: 1},
+		{name: "Le 65536", raw: []byte{0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00}, wantLe: 65536},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, err := ParseCommand(test.raw)
+			if err != nil {
+				t.Fatalf("parse case 2E: %v", err)
+			}
+			if parsed.Le != test.wantLe {
+				t.Fatalf("expected Le=%d, got %d", test.wantLe, parsed.Le)
+			}
+			if len(parsed.Data) != 0 {
+				t.Fatalf("expected empty data, got %X", parsed.Data)
+			}
+		})
+	}
+}
+
+func TestCommandBytesExtendedLe65536RoundTrip(t *testing.T) {
+	data := bytes.Repeat([]byte{0xAB}, 300)
+	cmd := &Command{Cla: 0x00, Ins: 0xFE, P1: 0x07, P2: 0x9C, Data: data, Le: 65536}
+	raw := cmd.Bytes()
+	if len(raw) < 2 || raw[len(raw)-2] != 0x00 || raw[len(raw)-1] != 0x00 {
+		t.Fatalf("Le=65536 must be encoded as 00 00, got tail %X", raw[len(raw)-2:])
+	}
+	parsed, err := ParseCommand(raw)
+	if err != nil {
+		t.Fatalf("parse extended: %v", err)
+	}
+	if parsed.Le != 65536 {
+		t.Fatalf("expected Le=65536, got %d", parsed.Le)
+	}
+	if !bytes.Equal(parsed.Data, data) {
+		t.Fatal("extended data round-trip mismatch")
+	}
+	if parsed.Cla != cmd.Cla || parsed.Ins != cmd.Ins || parsed.P1 != cmd.P1 || parsed.P2 != cmd.P2 {
+		t.Fatalf("header round-trip mismatch: %+v", parsed)
+	}
+}

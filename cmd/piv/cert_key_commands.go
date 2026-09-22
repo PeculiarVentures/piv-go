@@ -115,8 +115,8 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	_ = generate.MarkFlagRequired("alg")
 	generate.Flags().BoolVar(&generateMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	generate.Flags().StringVar(&generateMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
-	generate.Flags().StringVar(&generatePinPolicy, "pin-policy", "", "Slot PIN policy: never, once, or always")
-	generate.Flags().StringVar(&generateTouchPolicy, "touch-policy", "", "Slot touch policy: never, always, or cached")
+	generate.Flags().StringVar(&generatePinPolicy, "pin-policy", "", "Slot PIN policy: never, once, or always (default omits the tag; the device applies its own default)")
+	generate.Flags().StringVar(&generateTouchPolicy, "touch-policy", "", "Slot touch policy: never, always, or cached (default omits the tag; the device applies its own default)")
 	generate.Flags().BoolVar(&generateDryRun, "dry-run", false, "Show the planned action without mutating the token")
 
 	var publicFormat string
@@ -283,8 +283,8 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	_ = importKey.MarkFlagRequired("in")
 	importKey.Flags().BoolVar(&importMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	importKey.Flags().StringVar(&importMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
-	importKey.Flags().StringVar(&importPinPolicy, "pin-policy", "", "Slot PIN policy: never, once, or always")
-	importKey.Flags().StringVar(&importTouchPolicy, "touch-policy", "", "Slot touch policy: never, always, or cached")
+	importKey.Flags().StringVar(&importPinPolicy, "pin-policy", "", "Slot PIN policy: never, once, or always (default omits the tag; the device applies its own default)")
+	importKey.Flags().StringVar(&importTouchPolicy, "touch-policy", "", "Slot touch policy: never, always, or cached (default omits the tag; the device applies its own default)")
 	importKey.Flags().BoolVar(&importDryRun, "dry-run", false, "Show the planned action without mutating the token")
 
 	command.AddCommand(generate, public, deleteCommand, sign, challenge, importKey)

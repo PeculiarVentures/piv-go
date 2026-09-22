@@ -225,3 +225,54 @@ func TestClient_ImportKey_Rejects(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodeImportKeyData_RejectsNonTwoPrimeRSA(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	withPrimes := func(count int) *rsa.PrivateKey {
+		primes := make([]*big.Int, 0, count)
+		for i := 0; i < count && i < len(rsaKey.Primes); i++ {
+			primes = append(primes, rsaKey.Primes[i])
+		}
+		for len(primes) < count {
+			primes = append(primes, big.NewInt(3))
+		}
+		return &rsa.PrivateKey{
+			PublicKey:   rsaKey.PublicKey,
+			D:           rsaKey.D,
+			Primes:      primes,
+			Precomputed: rsaKey.Precomputed,
+		}
+	}
+
+	tests := []struct {
+		name       string
+		primes     int
+		wantErr    bool
+		errContain string
+	}{
+		{name: "two primes accepted", primes: 2},
+		{name: "no primes rejected", primes: 0, wantErr: true, errContain: "2 primes"},
+		{name: "single prime rejected", primes: 1, wantErr: true, errContain: "2 primes"},
+		{name: "multi-prime rejected", primes: 3, wantErr: true, errContain: "unsupported"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := encodeImportKeyData(AlgRSA2048, withPrimes(test.primes), PinPolicyDefault, TouchPolicyDefault)
+			if !test.wantErr {
+				if err != nil {
+					t.Fatalf("encodeImportKeyData() error = %v", err)
+				}
+				if len(data) == 0 {
+					t.Fatal("expected non-empty import payload")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.errContain) {
+				t.Fatalf("expected error containing %q, got %v", test.errContain, err)
+			}
+		})
+	}
+}

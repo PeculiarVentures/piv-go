@@ -26,8 +26,9 @@ func (c *Command) Bytes() []byte {
 		buf = append(buf, c.Data...)
 		if c.Le >= 0 {
 			le := c.Le
-			if le > 0xFFFF {
-				le = 0xFFFF
+			if le <= 0 || le > 0xFFFF {
+				// 00 00 encodes the maximum extended Le of 65536.
+				le = 0
 			}
 			buf = append(buf, byte(le>>8), byte(le))
 		}
@@ -101,6 +102,15 @@ func ParseCommand(raw []byte) (*Command, error) {
 
 	if raw[4] == 0x00 {
 		// Extended-length APDU: 00 LcHi LcLo, or case 2E with two-byte Le.
+		if len(raw) == 7 {
+			// Case 2E: no data, the two bytes after 0x00 are Le.
+			le := int(raw[5])<<8 | int(raw[6])
+			if le == 0 {
+				le = 65536
+			}
+			cmd.Le = le
+			return cmd, nil
+		}
 		if len(raw) >= 7 {
 			lc := int(raw[5])<<8 | int(raw[6])
 			if len(raw) < 7+lc {

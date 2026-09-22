@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/PeculiarVentures/piv-go/emulator"
 	"github.com/PeculiarVentures/piv-go/internal/cli/app"
 	"github.com/PeculiarVentures/piv-go/piv"
+	"github.com/spf13/cobra"
 )
 
 type fakeCardContextFactory struct {
@@ -202,6 +204,30 @@ func TestTLVDecodeJSONFromStdin(t *testing.T) {
 	}
 }
 
+func TestKeyPolicyFlagsDocumentDeviceDefaults(t *testing.T) {
+	cli, _, _ := newTestCLI(t, nil, bytes.NewReader(nil))
+	root := cli.rootCommand()
+	find := func(path ...string) *cobra.Command {
+		current := root
+		for _, name := range path {
+			found, _, err := current.Find([]string{name})
+			if err != nil || found == nil {
+				t.Fatalf("command %v not found: %v", path, err)
+			}
+			current = found
+		}
+		return current
+	}
+	for _, path := range [][]string{{"key", "generate"}, {"key", "import"}} {
+		command := find(path...)
+		for _, flag := range []string{"pin-policy", "touch-policy"} {
+			usage := command.Flags().Lookup(flag).Usage
+			if !strings.Contains(usage, "device applies its own default") {
+				t.Fatalf("%s --%s usage must document device defaults, got %q", strings.Join(path, " "), flag, usage)
+			}
+		}
+	}
+}
 func newReadyCard() piv.Card {
 	card := emulator.NewCard()
 	card.RegisterINSHandler(0xA4, func(_ *emulator.Card, _ []byte) ([]byte, error) {

@@ -158,6 +158,7 @@ func TestYubiKeyAdapterImportKeyMatchesTrace(t *testing.T) {
 	mock := emulator.NewCard()
 	enqueueManagementAuth(mock)
 	mock.SetSuccessResponse(InsImportKey, nil)
+	mock.SetSuccessResponse(0xDB, nil)
 
 	if err := NewAdapter().ImportKey(newYubiKeyPolicySession(mock), piv.SlotSignature, piv.AlgECCP256, fixedScalarP256Key(), 0x01, 0x02); err != nil {
 		t.Fatalf("ImportKey() error = %v", err)
@@ -257,5 +258,81 @@ func TestChangeManagementKeyWithTouchFallsBackWithoutTouch(t *testing.T) {
 	}
 	if setKeyCmd := findCommand(mock, 0xFF); setKeyCmd == nil || setKeyCmd[3] != 0xFF {
 		t.Fatalf("fallback rotation must use P2 0xFF, got %X", setKeyCmd)
+	}
+}
+
+func TestYubiKeyAdapterImportKeyStoresPublicKeyForMetadataLessFirmware(t *testing.T) {
+	privateKey := fixedScalarP256Key()
+	mock := emulator.NewCard()
+	enqueueManagementAuth(mock)
+	mock.SetSuccessResponse(InsImportKey, nil)
+	mock.SetSuccessResponse(0xDB, nil)
+
+	if err := NewAdapter().ImportKey(newYubiKeyPolicySession(mock), piv.SlotSignature, piv.AlgECCP256, privateKey, 0x00, 0x00); err != nil {
+		t.Fatalf("ImportKey() error = %v", err)
+	}
+
+	// IMPORT KEY alone does not publish the public key: the adapter must
+	// store it with PUT DATA so firmwares without GET METADATA keep working.
+	var stored []byte
+	for _, raw := range mock.TransmittedCommands {
+		if len(raw) < 2 || raw[1] != 0xDB {
+			continue
+		}
+		parsed, err := iso7816.ParseCommand(raw)
+		if err != nil {
+			t.Fatalf("parse PUT DATA command: %v", err)
+		}
+		tlvs, err := iso7816.ParseAllTLV(parsed.Data)
+		if err != nil {
+			t.Fatalf("parse PUT DATA payload: %v", err)
+		}
+		object := iso7816.FindTag(tlvs, 0x53)
+		if object == nil {
+			t.Fatalf("PUT DATA payload misses the 0x53 object: %X", parsed.Data)
+		}
+		stored = iso7816.EncodeTLV(0x53, object.Value)
+	}
+	if stored == nil {
+		t.Fatal("expected PUT DATA storing the imported public key")
+	}
+
+	storedKey, err := piv.ParsePublicKeyObject(stored)
+	if err != nil {
+		t.Fatalf("parse stored public key object: %v", err)
+	}
+	storedECDSA, ok := storedKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected ECDSA public key, got %T", storedKey)
+	}
+	if storedECDSA.X.Cmp(privateKey.PublicKey.X) != 0 || storedECDSA.Y.Cmp(privateKey.PublicKey.Y) != 0 {
+		t.Fatal("stored public key does not match the imported private key")
+	}
+
+	// Firmware without GET METADATA: INS 0xF7 is unstubbed, so the emulator
+	// answers 6D00 and ReadPublicKey must fall back to the standard object
+	// populated by the import above.
+	mock.SetSuccessResponse(0xCB, stored)
+	readBack, err := NewAdapter().ReadPublicKey(newYubiKeyPolicySession(mock), piv.SlotSignature)
+	if err != nil {
+		t.Fatalf("ReadPublicKey() without metadata error = %v", err)
+	}
+	readECDSA, ok := readBack.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected ECDSA public key, got %T", readBack)
+	}
+	if readECDSA.X.Cmp(privateKey.PublicKey.X) != 0 || readECDSA.Y.Cmp(privateKey.PublicKey.Y) != 0 {
+		t.Fatal("public key read without metadata does not match the imported key")
+	}
+
+	// The slot stays usable for signing without metadata as well.
+	wantSig := []byte{0x11, 0x22, 0x33}
+	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, wantSig)))
+	sig, err := newYubiKeyPolicySession(mock).Client.Sign(piv.AlgECCP256, piv.SlotSignature, []byte{0xAA})
+	if err != nil {
+		t.Fatalf("Sign() without metadata error = %v", err)
+	}
+	if !bytes.Equal(sig, wantSig) {
+		t.Fatalf("unexpected signature: %X", sig)
 	}
 }

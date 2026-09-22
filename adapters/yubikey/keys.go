@@ -2,6 +2,8 @@ package yubikey
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"fmt"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
@@ -21,7 +23,9 @@ const (
 
 // GenerateKey generates a key in the slot with the given algorithm and
 // YubiKey PIN/touch policies, then stores the generated public key in the
-// slot's standard PIV object. Default policies (0x00) omit the AA/AB tags.
+// slot's standard PIV object. Default policies (0x00) omit the AA/AB tags, in
+// which case the device applies its own default policies instead of preserving
+// the slot's previous policies.
 func (a *Adapter) GenerateKey(session *adapters.Session, slot piv.Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error) {
 	if err := requireSessionClient(session); err != nil {
 		return nil, err
@@ -44,7 +48,11 @@ func (a *Adapter) GenerateKey(session *adapters.Session, slot piv.Slot, algorith
 }
 
 // ImportKey imports a private key into the slot with the given algorithm and
-// YubiKey PIN/touch policies.
+// YubiKey PIN/touch policies, then stores the imported public key in the
+// slot's standard PIV object. IMPORT KEY (INS 0xFE) only replaces the private
+// key, so without this step firmwares without GET METADATA would keep serving
+// a stale public key (or none) for the slot. Default policies (0x00) omit the
+// AA/AB tags and the device applies its own defaults.
 func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
 	if err := requireSessionClient(session); err != nil {
 		return err
@@ -57,8 +65,29 @@ func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm 
 	if err := session.Client.ImportKey(slot, algorithm, privateKey, pinPolicy, touchPolicy); err != nil {
 		return fmt.Errorf("import YubiKey key into slot %s: %w", slot, err)
 	}
+	publicKey, err := importedPublicKey(privateKey)
+	if err != nil {
+		return fmt.Errorf("resolve imported YubiKey public key for slot %s: %w", slot, err)
+	}
+	session.Observe(adapters.LogLevelDebug, a, "import-key", "storing imported public key for %s", slot)
+	if err := session.Client.StoreGeneratedPublicKey(slot, algorithm, publicKey); err != nil {
+		return fmt.Errorf("store imported YubiKey public key for slot %s: %w", slot, err)
+	}
 	session.Observe(adapters.LogLevelInfo, a, "import-key", "completed YubiKey key import for %s", slot)
 	return nil
+}
+
+// importedPublicKey derives the public half of an imported private key for
+// storage in the slot's standard PIV object.
+func importedPublicKey(privateKey crypto.PrivateKey) (crypto.PublicKey, error) {
+	switch key := privateKey.(type) {
+	case *rsa.PrivateKey:
+		return &key.PublicKey, nil
+	case *ecdsa.PrivateKey:
+		return &key.PublicKey, nil
+	default:
+		return nil, fmt.Errorf("unsupported private key type %T", privateKey)
+	}
 }
 
 // ReadPublicKey reads the slot public key, preferring YubiKey slot metadata.

@@ -92,7 +92,8 @@ Treat these commands as state-changing operations:
 
 YubiKey slot policies: `key generate` and `key import` accept
 `--pin-policy never|once|always` and `--touch-policy never|always|cached`
-(default leaves the slot policy unchanged). `mgm rotate` accepts `--touch`
+(default omits the policy tags, so the device applies its own defaults instead
+of preserving the slot's previous policies). `mgm rotate` accepts `--touch`
 to require touch confirmation for management operations.
 
 Prefer `--dry-run` when available. Use `--yes` only when your automation already validated the target device and credentials.

@@ -12,7 +12,8 @@ import (
 
 // YubiKey PIN policy values for key generation and import.
 const (
-	// PinPolicyDefault leaves the slot PIN policy unchanged.
+	// PinPolicyDefault omits the PIN policy tag, so the device applies its
+	// own default policy instead of preserving the slot's previous policy.
 	PinPolicyDefault byte = 0x00
 	// PinPolicyNever disables PIN authentication for the slot key.
 	PinPolicyNever byte = 0x01
@@ -24,7 +25,8 @@ const (
 
 // YubiKey touch policy values for key generation and import.
 const (
-	// TouchPolicyDefault leaves the slot touch policy unchanged.
+	// TouchPolicyDefault omits the touch policy tag, so the device applies
+	// its own default policy instead of preserving the slot's previous policy.
 	TouchPolicyDefault byte = 0x00
 	// TouchPolicyNever disables touch confirmation for the slot key.
 	TouchPolicyNever byte = 0x01
@@ -45,11 +47,13 @@ const (
 )
 
 // ImportKey imports a private key into the specified slot using the YubiKey
-// IMPORT KEY command (00 FE <key_type> <slot>). Only RSA keys with exponent
-// 65537 and ECDSA keys are supported; other private key types are rejected as
-// unsupported (deferred). The algorithm byte selects the key type and must be
-// one of AlgRSA1024, AlgRSA2048, AlgECCP256, or AlgECCP384. Policy value 0x00
-// (default) omits the corresponding tag; values above 0x03 are rejected.
+// IMPORT KEY command (00 FE <key_type> <slot>). Only two-prime RSA keys with
+// exponent 65537 and ECDSA keys are supported; multi-prime RSA keys and other
+// private key types are rejected as unsupported (deferred). The algorithm byte
+// selects the key type and must be one of AlgRSA1024, AlgRSA2048, AlgECCP256, or AlgECCP384. Policy value 0x00
+// (default) omits the corresponding tag, in which case the device applies its
+// own default policy instead of preserving the slot's previous policy; values
+// above 0x03 are rejected.
 func (c *Client) ImportKey(slot Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
 	data, err := encodeImportKeyData(algorithm, privateKey, pinPolicy, touchPolicy)
 	if err != nil {
@@ -86,8 +90,8 @@ func encodeImportKeyData(algorithm byte, privateKey crypto.PrivateKey, pinPolicy
 		if key.E != 65537 {
 			return nil, fmt.Errorf("piv: unsupported RSA exponent %d, must be 65537", key.E)
 		}
-		if len(key.Primes) < 2 {
-			return nil, fmt.Errorf("piv: RSA private key primes are incomplete")
+		if len(key.Primes) != 2 {
+			return nil, fmt.Errorf("piv: unsupported RSA key with %d primes, exactly 2 primes are required", len(key.Primes))
 		}
 		if key.Precomputed.Dp == nil || key.Precomputed.Dq == nil || key.Precomputed.Qinv == nil {
 			key.Precompute()

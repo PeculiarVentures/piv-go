@@ -164,8 +164,9 @@ func generateAsymmetricKeyPairCommand(slot Slot, alg byte) *iso7816.Command {
 
 // generateAsymmetricKeyPairWithPoliciesCommand returns a GENERATE ASYMMETRIC
 // KEY PAIR command carrying YubiKey PIN/touch policy extensions. Policy value
-// 0x00 (default) omits the corresponding tag; values above 0x03 are rejected
-// as unsupported by this transport.
+// 0x00 (default) omits the corresponding tag, in which case the device applies
+// its own default policy instead of preserving the slot's previous policy;
+// values above 0x03 are rejected as unsupported by this transport.
 func generateAsymmetricKeyPairWithPoliciesCommand(slot Slot, alg byte, pinPolicy byte, touchPolicy byte) (*iso7816.Command, error) {
 	if err := checkPolicyValue("PIN policy", pinPolicy); err != nil {
 		return nil, err

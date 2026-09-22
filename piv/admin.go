@@ -72,9 +72,11 @@ func (c *Client) GenerateKeyPair(slot Slot, algorithm byte) (crypto.PublicKey, e
 
 // GenerateKeyPairWithPolicies generates an asymmetric key pair in the
 // specified slot with YubiKey PIN/touch policy extensions and returns the
-// corresponding public key. Default policies (0x00) omit the AA/AB tags,
-// producing a byte-for-byte standard GENERATE ASYMMETRIC KEY PAIR command.
-// Policy values above 0x03 are rejected as unsupported.
+// corresponding public key. Default policies (0x00) omit the AA/AB tags, in
+// which case the device applies its own default policies instead of preserving
+// the slot's previous policies, producing a byte-for-byte standard GENERATE
+// ASYMMETRIC KEY PAIR command. Policy values above 0x03 are rejected as
+// unsupported.
 func (c *Client) GenerateKeyPairWithPolicies(slot Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error) {
 	cmd, err := generateAsymmetricKeyPairWithPoliciesCommand(slot, algorithm, pinPolicy, touchPolicy)
 	if err != nil {

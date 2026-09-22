@@ -118,6 +118,8 @@ func ParseKeyAlgorithm(value string) (byte, string, error) {
 }
 
 // ParsePINPolicy resolves a slot PIN policy name to its YubiKey policy byte.
+// An empty value selects the default, which omits the policy tag so the
+// device applies its own default instead of preserving the slot's policy.
 func ParsePINPolicy(value string) (byte, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "default":
@@ -134,6 +136,8 @@ func ParsePINPolicy(value string) (byte, error) {
 }
 
 // ParseTouchPolicy resolves a slot touch policy name to its YubiKey policy byte.
+// An empty value selects the default, which omits the policy tag so the
+// device applies its own default instead of preserving the slot's policy.
 func ParseTouchPolicy(value string) (byte, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "default":
