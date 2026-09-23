@@ -585,7 +585,11 @@ func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, 
 	return response, nil
 }
 
-// KeySign signs input data with a slot key.
+// KeySign signs input data with a slot key. The --hash mode selects both
+// the host hashing (hashInput) and the extended-RSA wire format: sha256
+// hashes the payload and wraps the digest with DigestInfo, while none
+// signs raw with PKCS#1 v1.5 type-1 padding but no DigestInfo (ykman
+// _pad_message semantics).
 func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Response, error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
@@ -596,6 +600,10 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 		return Response{}, err
 	}
 	payload, err = hashInput(payload, request.Hash)
+	if err != nil {
+		return Response{}, err
+	}
+	hashMode, err := signHashMode(request.Hash)
 	if err != nil {
 		return Response{}, err
 	}
@@ -627,7 +635,7 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 			return Response{}, err
 		}
 	}
-	signature, err := target.Session.Client.Sign(algorithm, request.Slot, payload)
+	signature, err := target.Session.Client.Sign(algorithm, request.Slot, payload, hashMode)
 	if err != nil {
 		return Response{}, err
 	}
@@ -1074,6 +1082,22 @@ func hashInput(data []byte, mode string) ([]byte, error) {
 		return hashed[:], nil
 	default:
 		return nil, UsageError(fmt.Sprintf("unsupported hash mode %q", mode), "use none or sha256")
+	}
+}
+
+// signHashMode maps the CLI --hash flag to the explicit extended-RSA wire
+// format: none pads raw PKCS#1 v1.5 type-1 without DigestInfo, sha256 wraps
+// the hashed digest with DigestInfo. The mode is ignored for non-extended
+// algorithms but is still threaded explicitly so a 32-byte raw payload is
+// never confused with a digest.
+func signHashMode(mode string) (piv.RSASignHashMode, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "none":
+		return piv.RSASignHashNone, nil
+	case "sha256":
+		return piv.RSASignHashSHA256, nil
+	default:
+		return piv.RSASignHashNone, UsageError(fmt.Sprintf("unsupported hash mode %q", mode), "use none or sha256")
 	}
 }
 

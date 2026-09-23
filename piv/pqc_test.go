@@ -2,8 +2,10 @@ package piv
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"math/big"
 	"strings"
 	"testing"
@@ -355,7 +357,7 @@ func TestClient_SignPQC(t *testing.T) {
 			sig := bytes.Repeat([]byte{0xEE}, test.sigLen)
 			mock := emulator.NewCard()
 			mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, sig)))
-			got, err := NewClient(mock).Sign(test.algorithm, SlotSignature, msg)
+			got, err := NewClient(mock).Sign(test.algorithm, SlotSignature, msg, RSASignHashNone)
 			if err != nil {
 				t.Fatalf("Sign() error = %v", err)
 			}
@@ -413,8 +415,12 @@ func assertPKCS1v15Block(t *testing.T, em []byte, k int, suffix []byte) {
 func TestClient_SignExtendedRSAPadding(t *testing.T) {
 	// F3: YubiKey 6 performs the raw RSA private-key operation for
 	// RSA-3072/4096, so the host formats the challenge to exactly
-	// modulus length. A 32-byte message is DigestInfo-wrapped (CLI --hash
-	// sha256); shorter messages are type-1 padded raw (CLI --hash none).
+	// modulus length with explicit hash mode. RSASignHashSHA256 wraps a
+	// 32-byte digest with DigestInfo (CLI --hash sha256 after hashInput);
+	// RSASignHashNone pads raw without DigestInfo (CLI --hash none).
+	// Raw follows ykman _pad_message (yubikit/piv.py:546): RSA always
+	// carries PKCS#1 v1.5 type-1 padding, so raw means "no DigestInfo",
+	// not unpadded textbook RSA.
 	digest := bytes.Repeat([]byte{0x5A}, 32)
 	for _, test := range []struct {
 		algorithm byte
@@ -424,34 +430,101 @@ func TestClient_SignExtendedRSAPadding(t *testing.T) {
 		{algorithm: AlgRSA3072, k: 384, sigLen: 384},
 		{algorithm: AlgRSA4096, k: 512, sigLen: 512},
 	} {
-		t.Run("digest", func(t *testing.T) {
+		t.Run("digest-sha256", func(t *testing.T) {
 			mock := emulator.NewCard()
 			mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, bytes.Repeat([]byte{0xEE}, test.sigLen))))
-			if _, err := NewClient(mock).Sign(test.algorithm, SlotSignature, digest); err != nil {
+			if _, err := NewClient(mock).Sign(test.algorithm, SlotSignature, digest, RSASignHashSHA256); err != nil {
 				t.Fatalf("Sign() error = %v", err)
 			}
 			challenge := signChallenge(t, mock.TransmittedCommands[0])
 			wantSuffix := append(append([]byte(nil), sha256DigestInfoPrefix...), digest...)
 			assertPKCS1v15Block(t, challenge, test.k, wantSuffix)
 		})
-		t.Run("raw", func(t *testing.T) {
+		t.Run("raw-short", func(t *testing.T) {
 			msg := []byte{0x01, 0x02, 0x03}
 			mock := emulator.NewCard()
 			mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, bytes.Repeat([]byte{0xEE}, test.sigLen))))
-			if _, err := NewClient(mock).Sign(test.algorithm, SlotSignature, msg); err != nil {
+			if _, err := NewClient(mock).Sign(test.algorithm, SlotSignature, msg, RSASignHashNone); err != nil {
 				t.Fatalf("Sign() error = %v", err)
 			}
 			challenge := signChallenge(t, mock.TransmittedCommands[0])
 			assertPKCS1v15Block(t, challenge, test.k, msg)
+			if bytes.Contains(challenge, sha256DigestInfoPrefix) {
+				t.Fatal("raw challenge must not contain DigestInfo")
+			}
+		})
+		t.Run("raw-32-no-digestinfo", func(t *testing.T) {
+			// Regression: a 32-byte raw message under --hash none must
+			// stay raw; length alone must not trigger DigestInfo.
+			msg32 := bytes.Repeat([]byte{0x01}, 32)
+			mock := emulator.NewCard()
+			mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, bytes.Repeat([]byte{0xEE}, test.sigLen))))
+			if _, err := NewClient(mock).Sign(test.algorithm, SlotSignature, msg32, RSASignHashNone); err != nil {
+				t.Fatalf("Sign() error = %v", err)
+			}
+			challenge := signChallenge(t, mock.TransmittedCommands[0])
+			assertPKCS1v15Block(t, challenge, test.k, msg32)
+			if bytes.Contains(challenge, sha256DigestInfoPrefix) {
+				t.Fatal("32-byte raw challenge must not contain DigestInfo")
+			}
 		})
 	}
-	// Oversize messages reject before any APDU.
+	// SHA-256 mode requires a 32-byte digest; anything else rejects
+	// before any APDU.
+	for _, msg := range [][]byte{{0x01, 0x02, 0x03}, bytes.Repeat([]byte{0x01}, 33), bytes.Repeat([]byte{0x01}, 400)} {
+		mock := emulator.NewCard()
+		if _, err := NewClient(mock).Sign(AlgRSA3072, SlotSignature, msg, RSASignHashSHA256); err == nil {
+			t.Fatalf("expected digest-length error for %d bytes, got nil", len(msg))
+		}
+		if len(mock.TransmittedCommands) != 0 {
+			t.Fatalf("no APDU must be sent on digest-length rejection, got %d commands", len(mock.TransmittedCommands))
+		}
+	}
+	// Oversize raw messages reject before any APDU.
 	mock := emulator.NewCard()
-	if _, err := NewClient(mock).Sign(AlgRSA3072, SlotSignature, bytes.Repeat([]byte{0x01}, 400)); err == nil || !strings.Contains(err.Error(), "too long") {
+	if _, err := NewClient(mock).Sign(AlgRSA3072, SlotSignature, bytes.Repeat([]byte{0x01}, 400), RSASignHashNone); err == nil || !strings.Contains(err.Error(), "too long") {
 		t.Fatalf("expected too-long error, got %v", err)
 	}
 	if len(mock.TransmittedCommands) != 0 {
 		t.Fatalf("no APDU must be sent for oversize message, got %d", len(mock.TransmittedCommands))
+	}
+}
+
+func TestClient_SignExtendedRSAGoVerification(t *testing.T) {
+	// The sha256 wire block must match Go's PKCS#1 v1.5 construction:
+	// a real RSA-3072 SignPKCS1v15/VerifyPKCS1v15 round-trip over the
+	// same digest proves the DigestInfo path, while the none wire block
+	// is verified manually (00 01 FF..FF 00 || msg, no DigestInfo)
+	// because Go's VerifyPKCS1v15 always expects DigestInfo for named
+	// hashes and has no raw type-1 verifier.
+	priv, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		t.Fatalf("generate RSA-3072: %v", err)
+	}
+	msg := []byte("extended-rsa verification payload")
+	sum := sha256.Sum256(msg)
+	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatalf("SignPKCS1v15: %v", err)
+	}
+	if err := rsa.VerifyPKCS1v15(&priv.PublicKey, crypto.SHA256, sum[:], sig); err != nil {
+		t.Fatalf("VerifyPKCS1v15: %v", err)
+	}
+	em, err := formatExtendedRSAChallenge(AlgRSA3072, sum[:], RSASignHashSHA256)
+	if err != nil {
+		t.Fatalf("formatExtendedRSAChallenge(sha256): %v", err)
+	}
+	wantSuffix := append(append([]byte(nil), sha256DigestInfoPrefix...), sum[:]...)
+	assertPKCS1v15Block(t, em, 384, wantSuffix)
+
+	rawMsg := []byte{0x01, 0x02, 0x03}
+	emRaw, err := formatExtendedRSAChallenge(AlgRSA3072, rawMsg, RSASignHashNone)
+	if err != nil {
+		t.Fatalf("formatExtendedRSAChallenge(none): %v", err)
+	}
+	assertPKCS1v15Block(t, emRaw, 384, rawMsg)
+	if bytes.Contains(emRaw, sha256DigestInfoPrefix) {
+		t.Fatal("raw block must not contain DigestInfo")
 	}
 }
 

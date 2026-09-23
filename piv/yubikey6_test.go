@@ -174,7 +174,7 @@ func TestClient_YubiKey6GapRejectedWithoutAPDU(t *testing.T) {
 	}
 	{
 		mock := emulator.NewCard()
-		if _, err := NewClient(mock).Sign(AlgX25519, SlotSignature, []byte{0xAA}); err == nil || !strings.Contains(err.Error(), "x25519 cannot sign: use ECDH") {
+		if _, err := NewClient(mock).Sign(AlgX25519, SlotSignature, []byte{0xAA}, RSASignHashNone); err == nil || !strings.Contains(err.Error(), "x25519 cannot sign: use ECDH") {
 			t.Fatalf("sign x25519: expected ECDH hint, got %v", err)
 		}
 		if _, err := NewClient(mock).Authenticate(AlgX25519, SlotSignature, []byte{0xAA}); err == nil || !strings.Contains(err.Error(), "x25519 cannot sign: use ECDH") {
@@ -186,7 +186,7 @@ func TestClient_YubiKey6GapRejectedWithoutAPDU(t *testing.T) {
 	}
 	for _, algorithm := range []byte{AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024} {
 		mock := emulator.NewCard()
-		if _, err := NewClient(mock).Sign(algorithm, SlotSignature, []byte{0xAA}); err == nil || !strings.Contains(err.Error(), "not supported") {
+		if _, err := NewClient(mock).Sign(algorithm, SlotSignature, []byte{0xAA}, RSASignHashNone); err == nil || !strings.Contains(err.Error(), "not supported") {
 			t.Fatalf("sign 0x%02X: expected not-supported error, got %v", algorithm, err)
 		}
 		if _, err := NewClient(mock).Authenticate(algorithm, SlotSignature, []byte{0xAA}); err == nil || !strings.Contains(err.Error(), "not supported") {

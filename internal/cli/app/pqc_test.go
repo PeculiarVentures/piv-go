@@ -116,6 +116,64 @@ func TestParseCertificateDataRaw(t *testing.T) {
 	}
 }
 
+func TestParseCertificateDataRawPreservesTrailingWhitespaceBytes(t *testing.T) {
+	// P2: DER bytes are stored verbatim; trailing bytes that coincide
+	// with whitespace (0x20/0x0A/0x0D/0x09) must round-trip byte for byte.
+	base := []byte{0x30, 0x82, 0x01, 0x00, 0x01, 0x02}
+	for _, trail := range [][]byte{
+		{0x20}, {0x0A}, {0x0D}, {0x09},
+		{0x20, 0x0A, 0x0D, 0x09},
+		{0x09, 0x0D, 0x0A, 0x20},
+	} {
+		raw := append(append([]byte(nil), base...), trail...)
+		got, err := ParseCertificateDataRaw(raw)
+		if err != nil {
+			t.Fatalf("trail %X: %v", trail, err)
+		}
+		if !bytes.Equal(got, raw) {
+			t.Fatalf("trail %X: got %X, want %X", trail, got, raw)
+		}
+	}
+	// PEM input still decodes to block bytes.
+	der := mustTestCertificate(t)
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	got, err := ParseCertificateDataRaw(pemBytes)
+	if err != nil || !bytes.Equal(got, der) {
+		t.Fatalf("pem: got %d bytes, %v", len(got), err)
+	}
+}
+
+func TestParseRawKeyBytesPreservesWhitespaceEdges(t *testing.T) {
+	// P2: binary seeds of the exact length are accepted verbatim, even
+	// when edge bytes coincide with whitespace (0x20/0x0A/0x0D/0x09).
+	for _, edge := range []byte{0x20, 0x0A, 0x0D, 0x09} {
+		seed32 := bytes.Repeat([]byte{0xAB}, 32)
+		seed32[0] = edge
+		seed32[31] = edge
+		for _, alg := range []byte{piv.AlgEd25519, piv.AlgX25519} {
+			key, err := ParsePrivateKeyForAlgorithm(seed32, alg)
+			if err != nil {
+				t.Fatalf("edge 0x%02X alg 0x%02X: %v", edge, alg, err)
+			}
+			opaque, ok := key.(*piv.OpaquePrivateKey)
+			if !ok || !bytes.Equal(opaque.Raw, seed32) {
+				t.Fatalf("edge 0x%02X alg 0x%02X: unexpected key %#v", edge, alg, key)
+			}
+		}
+		seed64 := bytes.Repeat([]byte{0xD5}, piv.MLKEMSeedLength)
+		seed64[0] = edge
+		seed64[piv.MLKEMSeedLength-1] = edge
+		key, err := ParsePrivateKeyForAlgorithm(seed64, piv.AlgMLKEM768)
+		if err != nil {
+			t.Fatalf("edge 0x%02X mlkem768: %v", edge, err)
+		}
+		opaque, ok := key.(*piv.OpaquePrivateKey)
+		if !ok || !bytes.Equal(opaque.Raw, seed64) {
+			t.Fatalf("edge 0x%02X mlkem768: unexpected key %#v", edge, key)
+		}
+	}
+}
+
 func TestKeyGenerateMLKEM768(t *testing.T) {
 	ek := bytes.Repeat([]byte{0x47}, 1184)
 	card := emulator.NewCard()
@@ -831,7 +889,7 @@ func TestEncodePublicKeyEd25519Opaque(t *testing.T) {
 // CLI mapper reports unsupported-capability (exit 4), not internal (exit 9).
 func TestX25519SignMapsToUnsupported(t *testing.T) {
 	card := emulator.NewCard()
-	_, err := piv.NewClient(card).Sign(piv.AlgX25519, piv.SlotSignature, []byte{0xAA})
+	_, err := piv.NewClient(card).Sign(piv.AlgX25519, piv.SlotSignature, []byte{0xAA}, piv.RSASignHashNone)
 	if err == nil {
 		t.Fatal("expected X25519 sign rejection")
 	}

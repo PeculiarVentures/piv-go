@@ -146,7 +146,7 @@ if policy.RequiresPIN() || !policy.IsKnown() {
     }
 }
 
-signature, err := runtime.Session.Client.Sign(piv.AlgECCP256, piv.SlotSignature, digest)
+signature, err := runtime.Session.Client.Sign(piv.AlgECCP256, piv.SlotSignature, digest, piv.RSASignHashNone)
 if err != nil {
     log.Fatal(err)
 }

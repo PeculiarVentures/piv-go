@@ -3,6 +3,7 @@ package yubikey
 import (
 	"bytes"
 	"crypto/mlkem"
+	"encoding/hex"
 	"testing"
 
 	"github.com/PeculiarVentures/piv-go/emulator"
@@ -128,6 +129,74 @@ func TestYubiKeyAdapterImportKeyPQC(t *testing.T) {
 			t.Fatal("stored slot object must contain the derived encapsulation key")
 		}
 	})
+}
+
+func TestYubiKeyAdapterImportKeyDerivesPublicKey(t *testing.T) {
+	// P1: raw-seed import must store the derived public half, not the
+	// seed itself, in the publicly readable slot object. Vectors:
+	// Ed25519 RFC 8032 Section 7.1 TEST 1 (seed -> pub) and X25519
+	// RFC 7748 Section 6.1 (mirrored in Go crypto/ecdh test vectors).
+	edSeed, _ := hex.DecodeString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+	edPub, _ := hex.DecodeString("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+	xSeed, _ := hex.DecodeString("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+	xPub, _ := hex.DecodeString("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+	tests := []struct {
+		name      string
+		algorithm byte
+		slot      piv.Slot
+		priv      interface{}
+		seed      []byte
+		wantPub   []byte
+	}{
+		{name: "ed25519-opaque", algorithm: piv.AlgEd25519, slot: piv.SlotSignature, priv: &piv.OpaquePrivateKey{Algorithm: piv.AlgEd25519, Raw: edSeed}, seed: edSeed, wantPub: edPub},
+		{name: "x25519-bytes", algorithm: piv.AlgX25519, slot: piv.SlotKeyManagement, priv: xSeed, seed: xSeed, wantPub: xPub},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if bytes.Equal(test.seed, test.wantPub) {
+				t.Fatal("vector seed must differ from public key")
+			}
+			mock := emulator.NewCard()
+			enqueueManagementAuth(mock)
+			mock.SetSuccessResponse(InsImportKey, nil)
+			mock.SetSuccessResponse(0xDB, nil)
+			var err error
+			switch k := test.priv.(type) {
+			case *piv.OpaquePrivateKey:
+				err = NewAdapter().ImportKey(newYubiKeyPolicySession(mock), test.slot, test.algorithm, k, 0x00, 0x00)
+			case []byte:
+				err = NewAdapter().ImportKey(newYubiKeyPolicySession(mock), test.slot, test.algorithm, k, 0x00, 0x00)
+			default:
+				t.Fatalf("unexpected priv type %T", test.priv)
+			}
+			if err != nil {
+				t.Fatalf("ImportKey() error = %v", err)
+			}
+			var stored []byte
+			for _, raw := range mock.TransmittedCommands {
+				if len(raw) > 1 && raw[1] == 0xDB {
+					chunk, err := iso7816.ParseCommand(raw)
+					if err != nil {
+						t.Fatalf("parse PUT DATA: %v", err)
+					}
+					stored = append(stored, chunk.Data...)
+				}
+			}
+			if len(stored) == 0 {
+				t.Fatal("expected PUT DATA storing the imported public key")
+			}
+			if !bytes.Contains(stored, test.wantPub) {
+				t.Fatalf("stored object must contain derived public key %X", test.wantPub)
+			}
+			if bytes.Contains(stored, test.seed) && !bytes.Equal(test.seed, test.wantPub) {
+				// The seed must not leak into the public object. The
+				// check is Contains because the stored wrapper may
+				// coincidentally share short runs, but for these
+				// vectors the full 32-byte seed must be absent.
+				t.Fatalf("stored object must not contain the seed %X", test.seed)
+			}
+		})
+	}
 }
 
 func TestYubiKeyAdapterCalculateSecret(t *testing.T) {

@@ -522,9 +522,10 @@ func (s *MLDSASigner) OpaquePublicKey() *OpaquePublicKey {
 // verbatim: digest is the ML-DSA message (already hashed by the caller
 // when a pre-hash is desired) and opts are intentionally ignored because
 // the card performs pure ML-DSA over the raw bytes. The returned
-// signature length is validated against the variant.
+// signature length is validated against the variant. The RSA hash mode is
+// irrelevant for ML-DSA and passes RSASignHashNone.
 func (s *MLDSASigner) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
-	signature, err := s.client.Sign(s.algorithm, s.slot, digest)
+	signature, err := s.client.Sign(s.algorithm, s.slot, digest, RSASignHashNone)
 	if err != nil {
 		return nil, fmt.Errorf("piv: ML-DSA sign with slot %s: %w", s.slot, err)
 	}

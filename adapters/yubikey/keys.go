@@ -140,14 +140,36 @@ func opaqueImportPublicKey(requestedAlgorithm byte, keyAlgorithm byte, raw []byt
 		}
 		return &piv.OpaquePublicKey{Algorithm: requestedAlgorithm, Raw: ek}, nil
 	}
+	// Resolve the effective Ed25519/X25519 algorithm: a zero key algorithm
+	// defers to the requested algorithm (mirroring opaqueImportFields).
+	effective := requestedAlgorithm
+	if effective == 0 {
+		effective = keyAlgorithm
+	} else if keyAlgorithm != 0 && keyAlgorithm != effective {
+		return nil, fmt.Errorf("unsupported import: key algorithm 0x%02X does not match requested algorithm 0x%02X: not supported by this release", keyAlgorithm, requestedAlgorithm)
+	}
 	if len(raw) != 32 {
 		return nil, fmt.Errorf("unsupported raw private key length %d: not supported by this release", len(raw))
 	}
-	// The public half cannot be derived from the seed without the curve
-	// implementation; the stored object keeps the seed bytes so a later
-	// metadata read with algorithm context can resolve the key. Generation
-	// flows overwrite this with the real public key.
-	return &piv.OpaquePublicKey{Algorithm: keyAlgorithm, Raw: append([]byte(nil), raw...)}, nil
+	// Derive the real public half from the 32-byte seed so the publicly
+	// readable slot object never stores the seed itself.
+	switch effective {
+	case piv.AlgEd25519:
+		priv := ed25519.NewKeyFromSeed(raw)
+		public, ok := priv.Public().(ed25519.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("unsupported Ed25519 public key type %T: not supported by this release", priv.Public())
+		}
+		return &piv.OpaquePublicKey{Algorithm: piv.AlgEd25519, Raw: append([]byte(nil), public...)}, nil
+	case piv.AlgX25519:
+		priv, err := ecdh.X25519().NewPrivateKey(raw)
+		if err != nil {
+			return nil, fmt.Errorf("unsupported X25519 seed: %v: not supported by this release", err)
+		}
+		return &piv.OpaquePublicKey{Algorithm: piv.AlgX25519, Raw: append([]byte(nil), priv.PublicKey().Bytes()...)}, nil
+	default:
+		return nil, fmt.Errorf("unsupported raw private key algorithm 0x%02X: not supported by this release", effective)
+	}
 }
 
 // CalculateSecret performs X25519 ECDH key agreement with the slot key.

@@ -283,6 +283,13 @@ func parseRawSeed(data []byte) ([]byte, error) {
 }
 
 func parseRawKeyBytes(data []byte, want int) ([]byte, error) {
+	// Binary input of the exact length is accepted verbatim first, so
+	// seeds with whitespace-valued edge bytes (0x20/0x0A/0x0D/0x09)
+	// round-trip without trimming. Trimming and hex/base64 decoding
+	// apply only to textual formats afterwards.
+	if len(data) == want {
+		return append([]byte(nil), data...), nil
+	}
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == want {
 		return append([]byte(nil), trimmed...), nil
@@ -493,7 +500,10 @@ func ParseCertificateData(data []byte) ([]byte, error) {
 // DER bytes without X.509 validation. Use it with --raw-cert for
 // post-quantum (ML-DSA) slot certificates that have no strict X.509 profile
 // in this release. X25519 slots have no X.509 profile at all and reject
-// certificate import even in raw mode.
+// certificate import even in raw mode. DER bytes are stored verbatim: only
+// a copy is trimmed for PEM-header detection, so trailing signature bytes
+// that coincide with whitespace (0x20/0x0A/0x0D/0x09) round-trip byte for
+// byte.
 func ParseCertificateDataRaw(data []byte) ([]byte, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if strings.HasPrefix(trimmed, "-----BEGIN") {
@@ -506,11 +516,10 @@ func ParseCertificateDataRaw(data []byte) ([]byte, error) {
 		}
 		return append([]byte(nil), block.Bytes...), nil
 	}
-	raw := append([]byte(nil), bytes.TrimSpace(data)...)
-	if len(raw) == 0 {
+	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, IOError("unable to parse certificate input", "provide a PEM or DER encoded certificate with --raw-cert", nil)
 	}
-	return raw, nil
+	return append([]byte(nil), data...), nil
 }
 
 // EncodePublicKey serializes a public key as PEM or DER.

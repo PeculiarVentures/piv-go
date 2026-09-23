@@ -328,7 +328,7 @@ func TestYubiKeyAdapterImportKeyStoresPublicKeyForMetadataLessFirmware(t *testin
 	// The slot stays usable for signing without metadata as well.
 	wantSig := []byte{0x11, 0x22, 0x33}
 	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, wantSig)))
-	sig, err := newYubiKeyPolicySession(mock).Client.Sign(piv.AlgECCP256, piv.SlotSignature, []byte{0xAA})
+	sig, err := newYubiKeyPolicySession(mock).Client.Sign(piv.AlgECCP256, piv.SlotSignature, []byte{0xAA}, piv.RSASignHashNone)
 	if err != nil {
 		t.Fatalf("Sign() without metadata error = %v", err)
 	}
