@@ -226,6 +226,7 @@ func TestYubiKeyAdapterDeleteKeyUsesMoveKey(t *testing.T) {
 	mock.EnqueueResponse(0x87, challengeResp, uint16(iso7816.SwSuccess))
 	mock.EnqueueResponse(0x87, nil, uint16(iso7816.SwSuccess))
 	mock.SetSuccessResponse(0xF6, nil)
+	mock.SetSuccessResponse(0xDB, nil)
 
 	session := &adapters.Session{
 		Client:              piv.NewClient(mock),
@@ -250,6 +251,28 @@ func TestYubiKeyAdapterDeleteKeyUsesMoveKey(t *testing.T) {
 	}
 	if deleteCmd[2] != 0xFF || deleteCmd[3] != byte(piv.SlotAuthentication) {
 		t.Fatalf("unexpected delete command: %X", deleteCmd)
+	}
+
+	// F2: the slot object holding the stored public key template must be
+	// cleared after MOVE KEY, otherwise inspection keeps reporting the key.
+	var clearPayload []byte
+	for _, command := range mock.TransmittedCommands {
+		if len(command) > 1 && command[1] == 0xDB {
+			parsed, err := iso7816.ParseCommand(command)
+			if err != nil {
+				t.Fatalf("parse PUT DATA: %v", err)
+			}
+			tlvs, err := iso7816.ParseAllTLV(parsed.Data)
+			if err != nil {
+				t.Fatalf("parse PUT DATA payload: %v", err)
+			}
+			if object := iso7816.FindTag(tlvs, 0x53); object != nil && len(object.Value) == 0 {
+				clearPayload = command
+			}
+		}
+	}
+	if clearPayload == nil {
+		t.Fatalf("expected PUT DATA clearing the slot object, got: % X", mock.TransmittedCommands)
 	}
 }
 

@@ -1,0 +1,2 @@
+APDU -> 00 f7 00 9c
+APDU <- 01 01 e1 02 02 02 01 03 01 01 04 22 86 20 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 a5 90 00

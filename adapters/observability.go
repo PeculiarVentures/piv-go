@@ -16,6 +16,10 @@ const (
 	LogLevelInfo LogLevel = "info"
 	// LogLevelDebug describes a detailed diagnostic event.
 	LogLevelDebug LogLevel = "debug"
+	// LogLevelWarn describes a potentially unexpected but non-fatal
+	// operational event, such as proceeding against preview firmware
+	// without the usual version gate.
+	LogLevelWarn LogLevel = "warn"
 )
 
 // Event describes one adapter-level operational log entry.

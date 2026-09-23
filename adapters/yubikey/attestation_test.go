@@ -248,3 +248,83 @@ func TestAttestationVersionSupported(t *testing.T) {
 		}
 	}
 }
+
+func TestIsPreviewPlaceholderVersion(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{version: "0.0.1", want: true},
+		{version: "0.9.9", want: true},
+		{version: "1.0.0", want: false},
+		{version: "4.2.9", want: false},
+		{version: "5.7.0", want: false},
+		{version: "bogus", want: false},
+		{version: "", want: false},
+	}
+	for _, test := range tests {
+		if got := isPreviewPlaceholderVersion(test.version); got != test.want {
+			t.Fatalf("isPreviewPlaceholderVersion(%q) = %v, want %v", test.version, got, test.want)
+		}
+	}
+}
+
+func TestYubiKeyAdapterAttestKeyPreviewVersionBypassesGate(t *testing.T) {
+	der := testAttestationDER(t)
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xFD, []byte{0x00, 0x00, 0x01})
+	mock.SetSuccessResponse(0xF9, der)
+
+	trace := adapters.NewTraceCollector(adapters.TraceModeAdapterOnly)
+	session := adapters.NewSession(
+		piv.NewClient(mock),
+		adapters.WithReaderName("Yubico YubiKey OTP+FIDO+CCID"),
+		adapters.WithTraceCollector(trace),
+	)
+
+	got, err := NewAdapter().AttestKey(session, piv.SlotSignature)
+	if err != nil {
+		t.Fatalf("AttestKey() on preview firmware error = %v", err)
+	}
+	if !bytes.Equal(got, der) {
+		t.Fatal("AttestKey() on preview firmware must return the raw DER attestation certificate")
+	}
+	if findCommand(mock, 0xF9) == nil {
+		t.Fatal("preview firmware 0.0.1 must still send ATTEST KEY")
+	}
+
+	// The bypassed gate must be visible as a warn-level adapter event.
+	var warned bool
+	for _, line := range session.TraceLog() {
+		if strings.Contains(line, "attest-key") && strings.Contains(line, "0.0.1") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("preview firmware must emit a warn event, got %v", session.TraceLog())
+	}
+	testtrace.RequireMatchFile(t, "testdata/attest_key_preview_apdu_trace.txt", mock.APDULog())
+}
+
+func TestYubiKeyAdapterAttestKeyTransportErrorHintsVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version []byte
+		want    string
+	}{
+		{name: "preview", version: []byte{0x00, 0x00, 0x01}, want: "0.0.1"},
+		{name: "stable", version: []byte{0x05, 0x07, 0x00}, want: "5.7.0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := emulator.NewCard()
+			mock.SetSuccessResponse(0xFD, test.version)
+			mock.SetResponse(0xF9, nil, uint16(iso7816.SwFileNotFound))
+
+			_, err := NewAdapter().AttestKey(newAttestationSession(mock), piv.SlotSignature)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("transport error must hint firmware version %q, got %v", test.want, err)
+			}
+		})
+	}
+}

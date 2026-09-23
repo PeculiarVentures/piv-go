@@ -49,12 +49,29 @@ func PublicKeyAlgorithmName(publicKey crypto.PublicKey) string {
 			return "rsa1024"
 		case bits <= 2048:
 			return "rsa2048"
+		case bits <= 3072:
+			return "rsa3072"
+		case bits <= 4096:
+			return "rsa4096"
 		default:
 			return fmt.Sprintf("rsa%d", bits)
 		}
+	case *piv.OpaquePublicKey:
+		return opaquePublicKeyAlgorithmName(key.Algorithm, publicKey)
+	case piv.OpaquePublicKey:
+		return opaquePublicKeyAlgorithmName(key.Algorithm, publicKey)
 	default:
 		return fmt.Sprintf("%T", publicKey)
 	}
+}
+
+// opaquePublicKeyAlgorithmName resolves the display name of a YubiKey 6
+// opaque public key from its algorithm identifier.
+func opaquePublicKeyAlgorithmName(algorithm byte, publicKey crypto.PublicKey) string {
+	if name := adapters.NormalizeKeyAlgorithm(algorithm); name != adapters.KeyAlgorithmUnknown {
+		return string(name)
+	}
+	return fmt.Sprintf("%T", publicKey)
 }
 
 // CertificateSummary returns a compact label for a parsed certificate.

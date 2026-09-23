@@ -36,6 +36,11 @@ func (a *Adapter) ManagementKeyAlgorithm(session *adapters.Session, key []byte) 
 }
 
 // Version returns the YubiKey firmware version string (for example "5.7.0").
+//
+// The value is returned raw, exactly as reported by the token: preview
+// placeholders with major version 0 (for example "0.0.1") must not be gated
+// by callers. Attestation treats them as preview firmware and proceeds to
+// INS 0xF9 with a warning instead of enforcing the 4.3.0 minimum.
 func (a *Adapter) Version(session *adapters.Session) (string, error) {
 	if err := requireSessionClient(session); err != nil {
 		return "", err
@@ -185,6 +190,14 @@ func readSlotMetadata(client *piv.Client, slot piv.Slot) (yubiKeySlotMetadata, e
 		publicKey, err = piv.ParsePublicKeyObject(iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, publicKeyEncoded)))
 		if err != nil {
 			return yubiKeySlotMetadata{}, fmt.Errorf("yubikey: parse slot public key: %w", err)
+		}
+		// Stored objects carry no algorithm context, so an ambiguous
+		// Ed25519/X25519 raw key parses with Algorithm zero. Resolve
+		// it from the metadata algorithm byte when recognized.
+		if opaque, ok := publicKey.(*piv.OpaquePublicKey); ok && opaque.Algorithm == 0 {
+			if algorithm[0] == piv.AlgEd25519 || algorithm[0] == piv.AlgX25519 {
+				opaque.Algorithm = algorithm[0]
+			}
 		}
 	}
 
