@@ -73,6 +73,20 @@ func importKeyPair(runtime *adapters.Runtime, slot piv.Slot, algorithm byte, pri
 	return runtime.Session.Client.ImportKey(slot, algorithm, privateKey, pinPolicy, touchPolicy)
 }
 
+// kemDecapsulator is implemented by adapters that decapsulate ML-KEM
+// ciphertexts with vendor-specific observability around the standard PIV
+// decapsulation flow (for example the YubiKey adapter).
+type kemDecapsulator interface {
+	Decapsulate(session *adapters.Session, slot piv.Slot, algorithm byte, ciphertext []byte) ([]byte, error)
+}
+
+func decapsulateSecret(runtime *adapters.Runtime, algorithm byte, slot piv.Slot, ciphertext []byte) ([]byte, error) {
+	if decapsulator, ok := runtime.Adapter.(kemDecapsulator); ok {
+		return decapsulator.Decapsulate(runtime.Session, slot, algorithm, ciphertext)
+	}
+	return runtime.Session.Client.Decapsulate(algorithm, slot, ciphertext)
+}
+
 func deleteKeyPair(runtime *adapters.Runtime, slot piv.Slot) error {
 	if deleter, ok := runtime.Adapter.(adapters.KeyDeletionAdapter); ok {
 		return deleter.DeleteKey(runtime.Session, slot)

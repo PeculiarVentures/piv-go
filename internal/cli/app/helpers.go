@@ -147,8 +147,8 @@ func SlotHex(slot piv.Slot) string {
 // case-insensitive and accept rsa1024, rsa2048, rsa3072, rsa4096, eccp256,
 // eccp384 (with p256 and p384 aliases), ed25519, x25519, mldsa44, mldsa65,
 // mldsa87 (YubiKey 6 preview), and mlkem512, mlkem768, mlkem1024. ML-KEM
-// names parse successfully and gap-reject later without an APDU: there is no
-// KEM flow in this release.
+// names select on-card decapsulation keys (generate/import/decapsulate);
+// signing, on-card encapsulation, and certificate import stay unsupported.
 func ParseKeyAlgorithm(value string) (byte, string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "p256", "eccp256":
@@ -180,7 +180,7 @@ func ParseKeyAlgorithm(value string) (byte, string, error) {
 	case "mlkem1024":
 		return piv.AlgMLKEM1024, "mlkem1024", nil
 	default:
-		return 0, "", UsageError(fmt.Sprintf("unsupported key algorithm %q", value), "use one of p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mldsa44, mldsa65, mldsa87, mlkem512, mlkem768, or mlkem1024 (ml-dsa preview, ml-kem gap-rejects)")
+		return 0, "", UsageError(fmt.Sprintf("unsupported key algorithm %q", value), "use one of p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mldsa44, mldsa65, mldsa87, mlkem512, mlkem768, or mlkem1024 (ml-dsa/ml-kem preview)")
 	}
 }
 
@@ -253,8 +253,18 @@ func parsePrivateKeyDER(data []byte) (crypto.PrivateKey, error) {
 // Ed25519/X25519 first try the PEM/DER encodings (PKCS #8 round-trips for
 // both); when that fails they fall back to a raw 32-byte seed supplied as
 // binary, hex (64 characters), or base64 (44 characters), returned as
-// *piv.OpaquePrivateKey. Document the raw fallback for --in handling.
+// *piv.OpaquePrivateKey. ML-KEM accepts only the raw 64-byte seed
+// (FIPS 203 d||z, identical for all variants) supplied as binary, hex, or
+// base64, returned as *piv.OpaquePrivateKey. Document the raw fallback for
+// --in handling.
 func ParsePrivateKeyForAlgorithm(data []byte, algorithm byte) (crypto.PrivateKey, error) {
+	if piv.IsMLKEMAlgorithm(algorithm) {
+		raw, err := parseRawKeyBytes(data, piv.MLKEMSeedLength)
+		if err != nil {
+			return nil, IOError("unable to parse private key input", fmt.Sprintf("provide a raw %d-byte seed (binary, hex, or base64) for %s", piv.MLKEMSeedLength, AlgorithmName(algorithm)), err)
+		}
+		return &piv.OpaquePrivateKey{Algorithm: algorithm, Raw: raw}, nil
+	}
 	if algorithm != piv.AlgEd25519 && algorithm != piv.AlgX25519 {
 		return ParsePrivateKeyData(data)
 	}
@@ -269,24 +279,28 @@ func ParsePrivateKeyForAlgorithm(data []byte, algorithm byte) (crypto.PrivateKey
 }
 
 func parseRawSeed(data []byte) ([]byte, error) {
+	return parseRawKeyBytes(data, 32)
+}
+
+func parseRawKeyBytes(data []byte, want int) ([]byte, error) {
 	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 32 {
+	if len(trimmed) == want {
 		return append([]byte(nil), trimmed...), nil
 	}
 	text := strings.TrimSpace(string(trimmed))
 	compact := strings.ReplaceAll(strings.ReplaceAll(text, " ", ""), "\n", "")
 	compact = strings.ReplaceAll(compact, "\t", "")
 	compact = strings.ReplaceAll(compact, "\r", "")
-	if decoded, err := hex.DecodeString(compact); err == nil && len(decoded) == 32 {
+	if decoded, err := hex.DecodeString(compact); err == nil && len(decoded) == want {
 		return decoded, nil
 	}
-	if decoded, err := base64.StdEncoding.DecodeString(compact); err == nil && len(decoded) == 32 {
+	if decoded, err := base64.StdEncoding.DecodeString(compact); err == nil && len(decoded) == want {
 		return decoded, nil
 	}
-	if decoded, err := base64.RawStdEncoding.DecodeString(compact); err == nil && len(decoded) == 32 {
+	if decoded, err := base64.RawStdEncoding.DecodeString(compact); err == nil && len(decoded) == want {
 		return decoded, nil
 	}
-	return nil, fmt.Errorf("expected 32 raw seed bytes, got %d input bytes", len(trimmed))
+	return nil, fmt.Errorf("expected %d raw key bytes, got %d input bytes", want, len(trimmed))
 }
 
 // ParseManagementAlgorithm resolves a management-key algorithm name.

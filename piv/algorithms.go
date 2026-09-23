@@ -17,8 +17,9 @@ const (
 // These identifiers are recognized for key discovery, display, and (per the
 // pqc-v1 matrix) card operations: RSA-3072/4096 generate/import/sign,
 // Ed25519 generate/import/sign, X25519 generate/import plus ECDH key
-// agreement (no signing), and ML-DSA generate/sign (preview, no import).
-// ML-KEM remains discovery-only: it has no APDU flow and gap-rejects.
+// agreement (no signing), ML-DSA generate/sign (preview, no import), and
+// ML-KEM generate/import plus on-card decapsulation (no signing, no on-card
+// encapsulation, no certificate import).
 const (
 	// AlgRSA3072 selects RSA-3072 (YubiKey 6 extension).
 	AlgRSA3072 byte = 0x05

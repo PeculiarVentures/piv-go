@@ -161,18 +161,9 @@ func TestParseGeneratedPublicKeyRSA3072(t *testing.T) {
 
 func TestClient_YubiKey6GapRejectedWithoutAPDU(t *testing.T) {
 	// pqc-v1 matrix GAP/REJECT paths: no APDU must be sent.
-	// Generate gap: ML-KEM only. Import gap: ML-DSA + ML-KEM.
-	// Sign reject: X25519 (use ECDH) + ML-KEM gap. Store gap: ML-KEM only.
-	for _, algorithm := range []byte{AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024} {
-		mock := emulator.NewCard()
-		if _, err := NewClient(mock).GenerateKeyPair(SlotSignature, algorithm); err == nil || !strings.Contains(err.Error(), "not supported") {
-			t.Fatalf("generate 0x%02X: expected not-supported error, got %v", algorithm, err)
-		}
-		if len(mock.TransmittedCommands) != 0 {
-			t.Fatalf("generate 0x%02X: no APDU must be sent on rejection, got %d commands", algorithm, len(mock.TransmittedCommands))
-		}
-	}
-	for _, algorithm := range []byte{AlgMLDSA44, AlgMLDSA65, AlgMLDSA87, AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024} {
+	// Generate gap: none (ML-KEM generates on-card). Import gap: ML-DSA
+	// only. Sign reject: X25519 (use ECDH) + ML-KEM (no sign flow).
+	for _, algorithm := range []byte{AlgMLDSA44, AlgMLDSA65, AlgMLDSA87} {
 		mock := emulator.NewCard()
 		if err := NewClient(mock).ImportKey(SlotSignature, algorithm, "not-a-key", PinPolicyDefault, TouchPolicyDefault); err == nil || !strings.Contains(err.Error(), "not supported") {
 			t.Fatalf("import 0x%02X: expected not-supported error, got %v", algorithm, err)
@@ -200,9 +191,6 @@ func TestClient_YubiKey6GapRejectedWithoutAPDU(t *testing.T) {
 		}
 		if _, err := NewClient(mock).Authenticate(algorithm, SlotSignature, []byte{0xAA}); err == nil || !strings.Contains(err.Error(), "not supported") {
 			t.Fatalf("authenticate 0x%02X: expected not-supported error, got %v", algorithm, err)
-		}
-		if err := NewClient(mock).StoreGeneratedPublicKey(SlotSignature, algorithm, &OpaquePublicKey{Algorithm: algorithm}); err == nil || !strings.Contains(err.Error(), "not supported") {
-			t.Fatalf("store 0x%02X: expected not-supported error, got %v", algorithm, err)
 		}
 		if len(mock.TransmittedCommands) != 0 {
 			t.Fatalf("algorithm 0x%02X: no APDU must be sent on rejection, got %d commands", algorithm, len(mock.TransmittedCommands))

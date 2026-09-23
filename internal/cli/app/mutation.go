@@ -294,14 +294,11 @@ func (s *MutationService) CertDelete(ctx context.Context, request DeleteRequest)
 	return response, nil
 }
 
-// KeyGenerate generates a new slot key. ML-KEM gap-rejects before touching
-// the token: there is no KEM flow in this release.
+// KeyGenerate generates a new slot key, including ML-KEM decapsulation keys
+// on YubiKey 6 tokens (firmware 6.0+).
 func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRequest) (Response, error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
-	}
-	if piv.IsMLKEMAlgorithm(request.Algorithm) {
-		return Response{}, UnsupportedError(fmt.Sprintf("key generation for algorithm %s is not supported by this release", request.AlgorithmName), "use rsa, ecdsa, ed25519, x25519, or ml-dsa preview algorithms")
 	}
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
@@ -337,22 +334,26 @@ func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRe
 }
 
 // KeyImport imports a private key into a slot. RSA-1024/2048/3072/4096,
-// ECCP-256/384, Ed25519, and X25519 are implemented; Ed25519/X25519 accept
-// PKCS #8 or a raw 32-byte seed (binary, hex, or base64) via --in. ML-DSA
-// and ML-KEM have no import APDU and gap-reject without sending a command.
+// ECCP-256/384, Ed25519, X25519, and ML-KEM-768/1024 are implemented;
+// Ed25519/X25519 accept PKCS #8 or a raw 32-byte seed (binary, hex, or
+// base64) via --in, while ML-KEM accepts the raw 64-byte seed (binary, hex,
+// or base64) via --in. ML-KEM-512 import stays unsupported (no standard
+// library implementation to derive the stored encapsulation key) and
+// ML-DSA has no import APDU; both gap-reject without sending a command.
 func (s *MutationService) KeyImport(ctx context.Context, request KeyImportRequest) (Response, error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
-	if piv.IsMLKEMAlgorithm(request.Algorithm) || piv.IsMLDSAAlgorithm(request.Algorithm) {
-		return Response{}, UnsupportedError(fmt.Sprintf("key import for algorithm %s is not supported by this release", request.AlgorithmName), "use rsa, ecdsa, ed25519, or x25519; ml-dsa/ml-kem have no import flow")
+	if piv.IsMLDSAAlgorithm(request.Algorithm) {
+		return Response{}, UnsupportedError(fmt.Sprintf("key import for algorithm %s is not supported by this release", request.AlgorithmName), "use rsa, ecdsa, ed25519, x25519, or ml-kem; ml-dsa has no import flow")
 	}
 	switch request.Algorithm {
 	case piv.AlgRSA1024, piv.AlgRSA2048, piv.AlgRSA3072, piv.AlgRSA4096,
 		piv.AlgECCP256, piv.AlgECCP384,
-		piv.AlgEd25519, piv.AlgX25519:
+		piv.AlgEd25519, piv.AlgX25519,
+		piv.AlgMLKEM512, piv.AlgMLKEM768, piv.AlgMLKEM1024:
 	default:
-		return Response{}, UsageError(fmt.Sprintf("unsupported import algorithm %q", request.AlgorithmName), "use p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, or x25519")
+		return Response{}, UsageError(fmt.Sprintf("unsupported import algorithm %q", request.AlgorithmName), "use p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mlkem512, mlkem768, or mlkem1024")
 	}
 	inputData, err := ReadInputFile(request.Path, s.input)
 	if err != nil {
@@ -478,9 +479,43 @@ func checkImportKeyMatch(algorithm byte, privateKey crypto.PrivateKey) error {
 		default:
 			return UsageError(fmt.Sprintf("import key type mismatch: x25519 requires an X25519 private key, got %T", privateKey), "provide an X25519 private key for --alg x25519")
 		}
+	case piv.AlgMLKEM512, piv.AlgMLKEM768, piv.AlgMLKEM1024:
+		if algorithm == piv.AlgMLKEM512 {
+			// The card accepts ML-KEM-512 seeds, but this release
+			// cannot derive the encapsulation key for the stored
+			// public key object without a standard library
+			// implementation.
+			return UnsupportedError(fmt.Sprintf("key import for algorithm %s is not supported by this release", AlgorithmName(algorithm)), "use mlkem768 or mlkem1024 for key import")
+		}
+		switch key := privateKey.(type) {
+		case *piv.OpaquePrivateKey:
+			if key == nil || len(key.Raw) != piv.MLKEMSeedLength {
+				return UsageError(fmt.Sprintf("import key type mismatch: %s requires a %d-byte seed, got %d bytes", AlgorithmName(algorithm), piv.MLKEMSeedLength, opaqueRawLength(key)), fmt.Sprintf("provide a raw %d-byte seed (binary, hex, or base64) for --alg %s", piv.MLKEMSeedLength, AlgorithmName(algorithm)))
+			}
+			return nil
+		case piv.OpaquePrivateKey:
+			if len(key.Raw) != piv.MLKEMSeedLength {
+				return UsageError(fmt.Sprintf("import key type mismatch: %s requires a %d-byte seed, got %d bytes", AlgorithmName(algorithm), piv.MLKEMSeedLength, len(key.Raw)), fmt.Sprintf("provide a raw %d-byte seed (binary, hex, or base64) for --alg %s", piv.MLKEMSeedLength, AlgorithmName(algorithm)))
+			}
+			return nil
+		case []byte:
+			if len(key) != piv.MLKEMSeedLength {
+				return UsageError(fmt.Sprintf("import key type mismatch: %s requires a %d-byte seed, got %d bytes", AlgorithmName(algorithm), piv.MLKEMSeedLength, len(key)), fmt.Sprintf("provide a raw %d-byte seed (binary, hex, or base64) for --alg %s", piv.MLKEMSeedLength, AlgorithmName(algorithm)))
+			}
+			return nil
+		default:
+			return UsageError(fmt.Sprintf("import key type mismatch: %s requires an ML-KEM seed, got %T", AlgorithmName(algorithm), privateKey), fmt.Sprintf("provide a raw %d-byte seed (binary, hex, or base64) for --alg %s", piv.MLKEMSeedLength, AlgorithmName(algorithm)))
+		}
 	default:
-		return UsageError("unsupported import algorithm", "use p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, or x25519")
+		return UsageError("unsupported import algorithm", "use p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mlkem512, mlkem768, or mlkem1024")
 	}
+}
+
+func opaqueRawLength(key *piv.OpaquePrivateKey) int {
+	if key == nil {
+		return 0
+	}
+	return len(key.Raw)
 }
 
 // bestEffortSlotAlgorithm resolves the slot key algorithm without failing
@@ -602,7 +637,10 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 // KeyChallenge runs GENERAL AUTHENTICATE with a supplied challenge. X25519
 // slots perform ECDH key agreement instead: the challenge hex carries the
 // 32-byte peer public key and the response is the 32-byte shared secret
-// (kind "ecdh-secret").
+// (kind "ecdh-secret"). ML-KEM slots decapsulate instead: the challenge hex
+// carries the variant-sized ciphertext (768/1088/1568 bytes for
+// ML-KEM-512/768/1024) and the response is the 32-byte shared secret (kind
+// "kem-secret"); encapsulation stays host-side.
 func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeRequest) (Response, error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
@@ -644,6 +682,26 @@ func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeReq
 			return Response{}, err
 		}
 		return s.binaryArtifactResponse(target, "key-challenge", "ecdh-secret", request.Encoding, request.Out, secret, request.Global.JSON)
+	}
+	if piv.IsMLKEMAlgorithm(algorithm) {
+		ciphertextLen, ok := piv.MLKEMCiphertextLength(algorithm)
+		if !ok || len(challenge) != ciphertextLen {
+			return Response{}, UsageError(fmt.Sprintf("invalid KEM ciphertext length %d for %s, must be %d bytes", len(challenge), AlgorithmName(algorithm), ciphertextLen), "provide the encapsulation ciphertext through --challenge-hex")
+		}
+		if request.UsePIN {
+			pin, resolveErr := resolver.ResolveString(request.PIN)
+			if resolveErr != nil {
+				return Response{}, resolveErr
+			}
+			if err := target.Session.Client.VerifyPIN(pin); err != nil {
+				return Response{}, err
+			}
+		}
+		secret, err := decapsulateSecret(target.Runtime, algorithm, request.Slot, challenge)
+		if err != nil {
+			return Response{}, err
+		}
+		return s.binaryArtifactResponse(target, "key-challenge", "kem-secret", request.Encoding, request.Out, secret, request.Global.JSON)
 	}
 	if request.UsePIN {
 		pin, resolveErr := resolver.ResolveString(request.PIN)

@@ -91,6 +91,9 @@ func TestClient_GenerateKeyPairPQC(t *testing.T) {
 		{name: "mldsa44", algorithm: AlgMLDSA44, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x87, bytes.Repeat([]byte{0x43}, 1312)))},
 		{name: "mldsa65", algorithm: AlgMLDSA65, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x87, bytes.Repeat([]byte{0x44}, 1952)))},
 		{name: "mldsa87", algorithm: AlgMLDSA87, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x87, bytes.Repeat([]byte{0x45}, 2592)))},
+		{name: "mlkem512", algorithm: AlgMLKEM512, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x88, bytes.Repeat([]byte{0x46}, 800)))},
+		{name: "mlkem768", algorithm: AlgMLKEM768, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x88, bytes.Repeat([]byte{0x47}, 1184)))},
+		{name: "mlkem1024", algorithm: AlgMLKEM1024, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x88, bytes.Repeat([]byte{0x48}, 1568)))},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -115,6 +118,36 @@ func TestClient_GenerateKeyPairPQC(t *testing.T) {
 			}
 			assertGenerateCommand(t, legacy.TransmittedCommands[0], SlotSignature, test.algorithm, PinPolicyDefault, TouchPolicyDefault)
 		})
+	}
+}
+
+func TestClient_GenerateKeyPairMLKEM768ExactBytes(t *testing.T) {
+	// Contract v1: 00 47 00 9E AC{80 E6} -> 7F49{88 1184}.
+	ek := bytes.Repeat([]byte{0x47}, 1184)
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0x47, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x88, ek)))
+	key, err := NewClient(mock).GenerateKeyPair(SlotCardAuth, AlgMLKEM768)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	opaque, ok := key.(*OpaquePublicKey)
+	if !ok || opaque.Algorithm != AlgMLKEM768 || !bytes.Equal(opaque.Raw, ek) {
+		t.Fatalf("unexpected ML-KEM-768 public key: %#v", key)
+	}
+	if len(mock.TransmittedCommands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(mock.TransmittedCommands))
+	}
+	raw := mock.TransmittedCommands[0]
+	cmd := mustParseCommand(t, raw)
+	if cmd.Cla != 0x00 || cmd.Ins != 0x47 || cmd.P1 != 0x00 || cmd.P2 != byte(SlotCardAuth) {
+		t.Fatalf("generate header = %02X %02X %02X %02X, want 00 47 00 9E", cmd.Cla, cmd.Ins, cmd.P1, cmd.P2)
+	}
+	wantData := iso7816.EncodeTLV(0xAC, iso7816.EncodeTLV(0x80, []byte{AlgMLKEM768}))
+	if !bytes.Equal(cmd.Data, wantData) {
+		t.Fatalf("generate data = %X, want %X", cmd.Data, wantData)
+	}
+	if len(raw) < 4 || raw[0] != 0x00 || raw[1] != 0x47 || raw[2] != 0x00 || raw[3] != 0x9E {
+		t.Fatalf("generate APDU prefix = %X, want 00 47 00 9E", raw[:4])
 	}
 }
 
@@ -223,6 +256,57 @@ func TestClient_ImportKeyPQC(t *testing.T) {
 			t.Fatalf("ImportKey() error = %v", err)
 		}
 		assertImportCommand(t, mock.TransmittedCommands[0], SlotKeyManagement, AlgX25519, map[uint]int{0x08: 32})
+	})
+	t.Run("mlkem768 tag 0A seed 64", func(t *testing.T) {
+		seed := bytes.Repeat([]byte{0xD5}, MLKEMSeedLength)
+		mock := emulator.NewCard()
+		mock.SetSuccessResponse(InsImportKey, nil)
+		if err := NewClient(mock).ImportKey(SlotKeyManagement, AlgMLKEM768, &OpaquePrivateKey{Algorithm: AlgMLKEM768, Raw: seed}, PinPolicyDefault, TouchPolicyDefault); err != nil {
+			t.Fatalf("ImportKey() error = %v", err)
+		}
+		assertImportCommand(t, mock.TransmittedCommands[0], SlotKeyManagement, AlgMLKEM768, map[uint]int{0x0A: MLKEMSeedLength})
+		cmd := mustParseCommand(t, mock.TransmittedCommands[0])
+		if cmd.Cla != 0x00 || cmd.Ins != InsImportKey || cmd.P1 != AlgMLKEM768 {
+			t.Fatalf("import header = %02X %02X %02X, want 00 FE E6", cmd.Cla, cmd.Ins, cmd.P1)
+		}
+		tlvs, _ := iso7816.ParseAllTLV(cmd.Data)
+		field := iso7816.FindTag(tlvs, 0x0A)
+		if field == nil || !bytes.Equal(field.Value, seed) {
+			t.Fatalf("tag 0x0A must carry the seed verbatim in %X", cmd.Data[:64])
+		}
+	})
+	t.Run("mlkem seed 64 for every variant", func(t *testing.T) {
+		for _, algorithm := range []byte{AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024} {
+			mock := emulator.NewCard()
+			mock.SetSuccessResponse(InsImportKey, nil)
+			if err := NewClient(mock).ImportKey(SlotSignature, algorithm, bytes.Repeat([]byte{0xD5}, MLKEMSeedLength), PinPolicyDefault, TouchPolicyDefault); err != nil {
+				t.Fatalf("ImportKey(0x%02X) error = %v", algorithm, err)
+			}
+			assertImportCommand(t, mock.TransmittedCommands[0], SlotSignature, algorithm, map[uint]int{0x0A: MLKEMSeedLength})
+		}
+	})
+	t.Run("mlkem rejects mismatch and bad length without APDU", func(t *testing.T) {
+		// Algorithm mismatch.
+		mock := emulator.NewCard()
+		if err := NewClient(mock).ImportKey(SlotSignature, AlgMLKEM768, &OpaquePrivateKey{Algorithm: AlgMLKEM512, Raw: bytes.Repeat([]byte{0xD5}, MLKEMSeedLength)}, PinPolicyDefault, TouchPolicyDefault); err == nil || !strings.Contains(err.Error(), "does not match") {
+			t.Fatalf("expected algorithm-mismatch error, got %v", err)
+		}
+		// Wrong seed length: a full decapsulation key or an
+		// encapsulation key is not accepted, only the 64-byte seed.
+		for _, raw := range [][]byte{
+			bytes.Repeat([]byte{0xD5}, 32),
+			bytes.Repeat([]byte{0xD5}, 63),
+			bytes.Repeat([]byte{0xD5}, 65),
+			bytes.Repeat([]byte{0xD5}, 1184),
+			bytes.Repeat([]byte{0xD5}, 2400),
+		} {
+			if err := NewClient(mock).ImportKey(SlotSignature, AlgMLKEM768, raw, PinPolicyDefault, TouchPolicyDefault); err == nil || !strings.Contains(err.Error(), "must be 64 bytes") {
+				t.Fatalf("expected length error for %d bytes, got %v", len(raw), err)
+			}
+		}
+		if len(mock.TransmittedCommands) != 0 {
+			t.Fatalf("no APDU must be sent on rejection, got %d commands", len(mock.TransmittedCommands))
+		}
 	})
 }
 
@@ -411,6 +495,76 @@ func TestClient_CalculateSecretRejectsBadPeer(t *testing.T) {
 	}
 }
 
+func TestClient_DecapsulateMLKEM768ExactBytes(t *testing.T) {
+	// Contract v1: 00 87 E6 slot 7C{82 empty, 86 1088} -> 7C{82 32}.
+	ciphertext := bytes.Repeat([]byte{0xC7}, 1088)
+	secret := bytes.Repeat([]byte{0x5E}, 32)
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, secret)))
+	got, err := NewClient(mock).Decapsulate(AlgMLKEM768, SlotKeyManagement, ciphertext)
+	if err != nil {
+		t.Fatalf("Decapsulate() error = %v", err)
+	}
+	if !bytes.Equal(got, secret) {
+		t.Fatal("secret must round-trip verbatim")
+	}
+	if len(mock.TransmittedCommands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(mock.TransmittedCommands))
+	}
+	raw := mock.TransmittedCommands[0]
+	if len(raw) < 4 || raw[0] != 0x00 || raw[1] != 0x87 || raw[2] != AlgMLKEM768 || raw[3] != byte(SlotKeyManagement) {
+		t.Fatalf("decapsulate APDU prefix = %X, want 00 87 E6 9D", raw[:4])
+	}
+	cmd := mustParseCommand(t, raw)
+	outer, _ := iso7816.ParseAllTLV(cmd.Data)
+	auth := iso7816.FindTag(outer, 0x7C)
+	if auth == nil {
+		t.Fatalf("0x7C not found in %X", cmd.Data)
+	}
+	inner, _ := iso7816.ParseAllTLV(auth.Value)
+	if placeholder := iso7816.FindTag(inner, 0x82); placeholder == nil || len(placeholder.Value) != 0 {
+		t.Fatalf("0x82 placeholder must be empty in %X", auth.Value)
+	}
+	if ctTLV := iso7816.FindTag(inner, 0x86); ctTLV == nil || !bytes.Equal(ctTLV.Value, ciphertext) {
+		t.Fatalf("0x86 ciphertext mismatch in %X", auth.Value[:64])
+	}
+}
+
+func TestClient_DecapsulateSizesAndRejects(t *testing.T) {
+	for _, test := range []struct {
+		algorithm byte
+		ctLen     int
+	}{
+		{algorithm: AlgMLKEM512, ctLen: 768},
+		{algorithm: AlgMLKEM768, ctLen: 1088},
+		{algorithm: AlgMLKEM1024, ctLen: 1568},
+	} {
+		mock := emulator.NewCard()
+		mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, bytes.Repeat([]byte{0x5E}, 32))))
+		if _, err := NewClient(mock).Decapsulate(test.algorithm, SlotSignature, bytes.Repeat([]byte{0xC7}, test.ctLen)); err != nil {
+			t.Fatalf("Decapsulate(0x%02X) error = %v", test.algorithm, err)
+		}
+		cmd := mustParseCommand(t, mock.TransmittedCommands[0])
+		if cmd.P1 != test.algorithm {
+			t.Fatalf("P1 = 0x%02X, want 0x%02X", cmd.P1, test.algorithm)
+		}
+	}
+	// Wrong ciphertext length and non-KEM algorithm reject before any APDU.
+	mock := emulator.NewCard()
+	if _, err := NewClient(mock).Decapsulate(AlgMLKEM768, SlotSignature, bytes.Repeat([]byte{0xC7}, 1087)); err == nil || !strings.Contains(err.Error(), "must be 1088 bytes") {
+		t.Fatalf("expected length error, got %v", err)
+	}
+	if _, err := NewClient(mock).Decapsulate(AlgECCP256, SlotSignature, bytes.Repeat([]byte{0xC7}, 1088)); err == nil || !strings.Contains(err.Error(), "unsupported decapsulation algorithm") {
+		t.Fatalf("expected algorithm error, got %v", err)
+	}
+	if _, err := NewClient(mock).Decapsulate(AlgX25519, SlotSignature, bytes.Repeat([]byte{0xC7}, 32)); err == nil || !strings.Contains(err.Error(), "unsupported decapsulation algorithm") {
+		t.Fatalf("expected algorithm error, got %v", err)
+	}
+	if len(mock.TransmittedCommands) != 0 {
+		t.Fatalf("no APDU must be sent on rejection, got %d commands", len(mock.TransmittedCommands))
+	}
+}
+
 func TestClient_StoreGeneratedPublicKeyPQC(t *testing.T) {
 	t.Run("rsa3072", func(t *testing.T) {
 		modulus := append([]byte{0x80}, bytes.Repeat([]byte{0x55}, 383)...)
@@ -453,6 +607,65 @@ func TestClient_StoreGeneratedPublicKeyPQC(t *testing.T) {
 		inner, _ := iso7816.ParseAllTLV(key.Value)
 		if point := iso7816.FindTag(inner, 0x87); point == nil || len(point.Value) != 1312 {
 			t.Fatalf("7F49{87/1312} mismatch in %X", template[:64])
+		}
+	})
+	t.Run("mlkem768 tag 88 stored as 53", func(t *testing.T) {
+		raw := bytes.Repeat([]byte{0x47}, 1184)
+		template, err := encodeGeneratedPublicKeyTemplate(AlgMLKEM768, &OpaquePublicKey{Algorithm: AlgMLKEM768, Raw: raw})
+		if err != nil {
+			t.Fatalf("encodeGeneratedPublicKeyTemplate() error = %v", err)
+		}
+		tlvs, _ := iso7816.ParseAllTLV(template)
+		key := iso7816.FindTag(tlvs, 0x7F49)
+		inner, _ := iso7816.ParseAllTLV(key.Value)
+		if point := iso7816.FindTag(inner, 0x88); point == nil || !bytes.Equal(point.Value, raw) {
+			t.Fatalf("7F49{88/1184} mismatch in %X", template[:64])
+		}
+		// Storing issues PUT DATA (0xDB) with the 0x53{7F49{88} + 71 00 + FE}
+		// wrapper shared with the other generated-key flows.
+		mock := emulator.NewCard()
+		mock.SetSuccessResponse(0xDB, nil)
+		if err := NewClient(mock).StoreGeneratedPublicKey(SlotCardAuth, AlgMLKEM768, &OpaquePublicKey{Algorithm: AlgMLKEM768, Raw: raw}); err != nil {
+			t.Fatalf("StoreGeneratedPublicKey() error = %v", err)
+		}
+		if len(mock.TransmittedCommands) == 0 {
+			t.Fatal("expected PUT DATA commands")
+		}
+		rawCmd := mock.TransmittedCommands[len(mock.TransmittedCommands)-1]
+		if len(rawCmd) < 2 || rawCmd[1] != 0xDB {
+			t.Fatalf("store APDU INS = 0x%02X, want 0xDB", rawCmd[1])
+		}
+		var stored []byte
+		for _, chunk := range mock.TransmittedCommands {
+			parsed, err := iso7816.ParseCommand(chunk)
+			if err != nil {
+				t.Fatalf("parse PUT DATA: %v", err)
+			}
+			stored = append(stored, parsed.Data...)
+		}
+		objects, err := iso7816.ParseAllTLV(stored)
+		if err != nil {
+			t.Fatalf("parse stored object: %v", err)
+		}
+		wrapper := iso7816.FindTag(objects, 0x53)
+		if wrapper == nil {
+			t.Fatalf("0x53 wrapper missing in %X", stored[:16])
+		}
+		fields, err := iso7816.ParseAllTLV(wrapper.Value)
+		if err != nil {
+			t.Fatalf("parse 0x53 wrapper: %v", err)
+		}
+		if key := iso7816.FindTag(fields, 0x7F49); key == nil {
+			t.Fatalf("7F49 missing in 0x53 wrapper %X", wrapper.Value[:16])
+		}
+		if policy := iso7816.FindTag(fields, 0x71); policy == nil {
+			t.Fatalf("71 missing in 0x53 wrapper %X", wrapper.Value[:16])
+		}
+		if iso7816.FindTag(fields, 0xFE) == nil {
+			t.Fatalf("FE missing in 0x53 wrapper %X", wrapper.Value[:16])
+		}
+		if !bytes.Contains(wrapper.Value, raw) {
+			t.Fatal("0x53 wrapper must contain the 1184-byte encapsulation key")
 		}
 	})
 }

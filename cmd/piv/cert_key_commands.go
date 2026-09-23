@@ -121,7 +121,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	generate.Flags().StringVar(&generateAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mldsa44, mldsa65, mldsa87 (preview), mlkem512, mlkem768, mlkem1024 (parse then gap-reject)")
+	generate.Flags().StringVar(&generateAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mldsa44, mldsa65, mldsa87, mlkem512, mlkem768, mlkem1024 (preview)")
 	_ = generate.MarkFlagRequired("alg")
 	generate.Flags().BoolVar(&generateMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	generate.Flags().StringVar(&generateMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")
@@ -235,7 +235,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 	var challengePINEnv string
 	challenge := &cobra.Command{
 		Use:   "challenge <slot>",
-		Short: "Run GENERAL AUTHENTICATE with a supplied challenge (X25519 slots perform ECDH)",
+		Short: "Run GENERAL AUTHENTICATE with a supplied challenge (X25519 slots perform ECDH, ML-KEM slots decapsulate)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slot, err := app.ParseSlotForMutation(args[0])
@@ -256,7 +256,7 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	challenge.Flags().StringVar(&challengeHex, "challenge-hex", "", "Hexadecimal challenge input (32-byte peer public key for X25519 ECDH)")
+	challenge.Flags().StringVar(&challengeHex, "challenge-hex", "", "Hexadecimal challenge input (32-byte peer public key for X25519 ECDH, 768/1088/1568-byte ciphertext for ML-KEM-512/768/1024 decapsulation)")
 	_ = challenge.MarkFlagRequired("challenge-hex")
 	challenge.Flags().StringVar(&challengeEncoding, "encoding", "base64", "Output encoding: base64, hex, or raw")
 	challenge.Flags().StringVarP(&challengeOut, "out", "o", "", "Write the challenge response to a file")
@@ -306,9 +306,9 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	importKey.Flags().StringVar(&importAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519 (mldsa/mlkem parse then gap-reject import)")
+	importKey.Flags().StringVar(&importAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mlkem768, mlkem1024 (mldsa and mlkem512 parse then gap-reject import)")
 	_ = importKey.MarkFlagRequired("alg")
-	importKey.Flags().StringVar(&importPath, "in", "", "Read the private key from a PEM or DER file (ed25519/x25519 also accept a raw 32-byte seed as binary, hex, or base64)")
+	importKey.Flags().StringVar(&importPath, "in", "", "Read the private key from a PEM or DER file (ed25519/x25519 also accept a raw 32-byte seed, mlkem768/mlkem1024 a raw 64-byte seed, as binary, hex, or base64)")
 	_ = importKey.MarkFlagRequired("in")
 	importKey.Flags().BoolVar(&importMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	importKey.Flags().StringVar(&importMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")

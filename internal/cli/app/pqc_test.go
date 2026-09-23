@@ -6,10 +6,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
@@ -114,15 +116,59 @@ func TestParseCertificateDataRaw(t *testing.T) {
 	}
 }
 
-func TestKeyGenerateMLKEMGapNoAPDU(t *testing.T) {
+func TestKeyGenerateMLKEM768(t *testing.T) {
+	ek := bytes.Repeat([]byte{0x47}, 1184)
 	card := emulator.NewCard()
-	service := NewMutationService(newPQCResolver(card, ""), nil, bytes.NewReader(nil), &bytes.Buffer{})
-	_, err := service.KeyGenerate(context.Background(), KeyGenerateRequest{Slot: piv.SlotSignature, Algorithm: piv.AlgMLKEM768, AlgorithmName: "mlkem768"})
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("expected not-supported gap, got %v", err)
+	stubSelect(card)
+	enqueueManagementAuthPair(card, 2)
+	card.SetSuccessResponse(0x47, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x88, ek)))
+	card.SetSuccessResponse(0xDB, nil)
+	targets := NewTargetResolver(mutationTestCardContextFactory{builders: map[string]func() piv.Card{
+		"YubiKey Test": func() piv.Card { return card },
+	}}, nil, bytes.NewReader(nil), &bytes.Buffer{})
+	service := NewMutationService(targets, NewOperationPlanner(bytes.NewReader(nil), &bytes.Buffer{}), bytes.NewReader(nil), &bytes.Buffer{})
+	t.Setenv("PIV_MANAGEMENT_KEY", "01020304050607080102030405060708")
+	resp, err := service.KeyGenerate(context.Background(), KeyGenerateRequest{
+		Global:        GlobalOptions{Reader: "YubiKey Test", NonInteractive: true},
+		Slot:          piv.SlotSignature,
+		Algorithm:     piv.AlgMLKEM768,
+		AlgorithmName: "mlkem768",
+		ManagementKey: SecretRequest{EnvVar: "PIV_MANAGEMENT_KEY"},
+	})
+	if err != nil {
+		t.Fatalf("KeyGenerate(mlkem768) error = %v", err)
 	}
-	if len(card.TransmittedCommands) != 0 {
-		t.Fatalf("gap must send no APDU, got %d", len(card.TransmittedCommands))
+	mutation, ok := resp.Result.(MutationResult)
+	if !ok || !mutation.Changed {
+		t.Fatalf("expected changed key-generate, got %+v", resp.Result)
+	}
+	// Verify the GENERATE wire: 00 47 00 9C AC{80 E6}.
+	found := false
+	for _, raw := range card.TransmittedCommands {
+		if len(raw) > 1 && raw[1] == 0x47 {
+			cmd, err := iso7816.ParseCommand(raw)
+			if err != nil {
+				t.Fatalf("parse generate: %v", err)
+			}
+			if cmd.Cla != 0x00 || cmd.P1 != 0x00 || cmd.P2 != byte(piv.SlotSignature) {
+				continue
+			}
+			outer, _ := iso7816.ParseAllTLV(cmd.Data)
+			ac := iso7816.FindTag(outer, 0xAC)
+			if ac == nil {
+				continue
+			}
+			inner, _ := iso7816.ParseAllTLV(ac.Value)
+			if alg := iso7816.FindTag(inner, 0x80); alg != nil && len(alg.Value) == 1 && alg.Value[0] == piv.AlgMLKEM768 {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("GENERATE 00 47 00 9C AC{80 E6} not found")
+	}
+	if !hasAPDU(card, 0xDB) {
+		t.Fatal("expected PUT DATA storing the generated public key")
 	}
 }
 
@@ -135,6 +181,205 @@ func TestKeyImportMLDSAGapNoAPDU(t *testing.T) {
 	}
 	if len(card.TransmittedCommands) != 0 {
 		t.Fatalf("gap must send no APDU, got %d", len(card.TransmittedCommands))
+	}
+}
+
+func TestKeyImportMLKEM768Seed(t *testing.T) {
+	dk, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatalf("GenerateKey768() error = %v", err)
+	}
+	seed := dk.Bytes()
+	wantEK := dk.EncapsulationKey().Bytes()
+	path := filepath.Join(t.TempDir(), "mlkem.seed")
+	if err := os.WriteFile(path, seed, 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	card := emulator.NewCard()
+	stubSelect(card)
+	enqueueManagementAuthPair(card, 2)
+	card.SetSuccessResponse(0xFE, nil)
+	card.SetSuccessResponse(0xDB, nil)
+	targets := NewTargetResolver(mutationTestCardContextFactory{builders: map[string]func() piv.Card{
+		"YubiKey Test": func() piv.Card { return card },
+	}}, nil, bytes.NewReader(nil), &bytes.Buffer{})
+	service := NewMutationService(targets, NewOperationPlanner(bytes.NewReader(nil), &bytes.Buffer{}), bytes.NewReader(nil), &bytes.Buffer{})
+	t.Setenv("PIV_MANAGEMENT_KEY", "01020304050607080102030405060708")
+	_, err = service.KeyImport(context.Background(), KeyImportRequest{
+		Global:        GlobalOptions{Reader: "YubiKey Test", NonInteractive: true},
+		Slot:          piv.SlotSignature,
+		Algorithm:     piv.AlgMLKEM768,
+		AlgorithmName: "mlkem768",
+		Path:          path,
+		ManagementKey: SecretRequest{EnvVar: "PIV_MANAGEMENT_KEY"},
+	})
+	if err != nil {
+		t.Fatalf("KeyImport(mlkem768 seed) error = %v", err)
+	}
+	// Verify IMPORT KEY wire: 00 FE E6 slot 0A{64 seed}.
+	found := false
+	for _, raw := range card.TransmittedCommands {
+		if len(raw) > 1 && raw[1] == 0xFE {
+			cmd, err := iso7816.ParseCommand(raw)
+			if err != nil {
+				t.Fatalf("parse import: %v", err)
+			}
+			if cmd.P1 != piv.AlgMLKEM768 {
+				t.Fatalf("P1 = 0x%02X, want 0xE6", cmd.P1)
+			}
+			tlvs, _ := iso7816.ParseAllTLV(cmd.Data)
+			tag := iso7816.FindTag(tlvs, 0x0A)
+			if tag == nil || !bytes.Equal(tag.Value, seed) {
+				t.Fatalf("tag 0x0A must carry the 64-byte seed in %X", cmd.Data[:16])
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected IMPORT KEY APDU")
+	}
+	// The stored slot object must carry the derived encapsulation key.
+	var stored []byte
+	for _, raw := range card.TransmittedCommands {
+		if len(raw) > 1 && raw[1] == 0xDB {
+			chunk, err := iso7816.ParseCommand(raw)
+			if err != nil {
+				t.Fatalf("parse PUT DATA: %v", err)
+			}
+			stored = append(stored, chunk.Data...)
+		}
+	}
+	if !bytes.Contains(stored, wantEK) {
+		t.Fatal("stored slot object must contain the derived encapsulation key")
+	}
+}
+
+func TestKeyImportMLKEM512GapNoAPDU(t *testing.T) {
+	seed := bytes.Repeat([]byte{0xD5}, piv.MLKEMSeedLength)
+	path := filepath.Join(t.TempDir(), "mlkem512.seed")
+	if err := os.WriteFile(path, seed, 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	card := emulator.NewCard()
+	service := NewMutationService(newPQCResolver(card, ""), nil, bytes.NewReader(nil), &bytes.Buffer{})
+	_, err := service.KeyImport(context.Background(), KeyImportRequest{Slot: piv.SlotSignature, Algorithm: piv.AlgMLKEM512, AlgorithmName: "mlkem512", Path: path})
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected not-supported gap, got %v", err)
+	}
+	if len(card.TransmittedCommands) != 0 {
+		t.Fatalf("gap must send no APDU, got %d", len(card.TransmittedCommands))
+	}
+}
+
+func TestKeyChallengeMLKEMDecapsulate(t *testing.T) {
+	dk, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatalf("GenerateKey768() error = %v", err)
+	}
+	ek := dk.EncapsulationKey().Bytes()
+	peer, err := mlkem.NewEncapsulationKey768(ek)
+	if err != nil {
+		t.Fatalf("NewEncapsulationKey768() error = %v", err)
+	}
+	hostSecret, ciphertext := peer.Encapsulate()
+	if len(ciphertext) != 1088 {
+		t.Fatalf("ciphertext length = %d, want 1088", len(ciphertext))
+	}
+	cardSecret := bytes.Repeat([]byte{0x5E}, 32)
+	card := emulator.NewCard()
+	stubSelect(card)
+	stubSlotMetadata(card, piv.AlgMLKEM768, iso7816.EncodeTLV(0x88, ek))
+	card.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, cardSecret)))
+	service := NewMutationService(newPQCResolver(card, ""), nil, bytes.NewReader(nil), &bytes.Buffer{})
+	resp, err := service.KeyChallenge(context.Background(), ChallengeRequest{
+		Global: GlobalOptions{Reader: "YubiKey Test", NonInteractive: true}, Slot: piv.SlotKeyManagement,
+		ChallengeHex: hex.EncodeToString(ciphertext), Encoding: "base64",
+	})
+	if err != nil {
+		t.Fatalf("KeyChallenge(KEM) error = %v", err)
+	}
+	artifact, ok := resp.Result.(ArtifactResult)
+	if !ok {
+		t.Fatalf("expected ArtifactResult, got %T", resp.Result)
+	}
+	if artifact.Kind != "kem-secret" {
+		t.Fatalf("kind = %q, want kem-secret", artifact.Kind)
+	}
+	_ = hostSecret
+	// Verify decapsulate wire: 00 87 E6 slot 7C{82 empty, 86 ct1088}.
+	found := false
+	for _, raw := range card.TransmittedCommands {
+		if len(raw) > 1 && raw[1] == 0x87 {
+			cmd, err := iso7816.ParseCommand(raw)
+			if err != nil {
+				continue
+			}
+			if cmd.P1 != piv.AlgMLKEM768 {
+				continue
+			}
+			outer, _ := iso7816.ParseAllTLV(cmd.Data)
+			auth := iso7816.FindTag(outer, 0x7C)
+			if auth == nil {
+				continue
+			}
+			inner, _ := iso7816.ParseAllTLV(auth.Value)
+			ctTLV := iso7816.FindTag(inner, 0x86)
+			if ctTLV != nil && bytes.Equal(ctTLV.Value, ciphertext) {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("decapsulate command with 0x86 ciphertext not found")
+	}
+}
+
+func TestKeyChallengeMLKEMRejectsBadCiphertext(t *testing.T) {
+	ek := bytes.Repeat([]byte{0x47}, 1184)
+	card := emulator.NewCard()
+	stubSelect(card)
+	stubSlotMetadata(card, piv.AlgMLKEM768, iso7816.EncodeTLV(0x88, ek))
+	service := NewMutationService(newPQCResolver(card, ""), nil, bytes.NewReader(nil), &bytes.Buffer{})
+	_, err := service.KeyChallenge(context.Background(), ChallengeRequest{
+		Global: GlobalOptions{Reader: "YubiKey Test", NonInteractive: true}, Slot: piv.SlotKeyManagement,
+		ChallengeHex: hex.EncodeToString(bytes.Repeat([]byte{0xC7}, 32)), Encoding: "base64",
+	})
+	if err == nil {
+		t.Fatal("expected ciphertext length error, got nil")
+	}
+	if hasAPDU(card, 0x87) {
+		t.Fatal("rejected challenge must not send GENERAL AUTHENTICATE")
+	}
+}
+
+func TestParsePrivateKeyForAlgorithmMLKEMSeed(t *testing.T) {
+	dk, err := mlkem.GenerateKey768()
+	if err != nil {
+		t.Fatalf("GenerateKey768() error = %v", err)
+	}
+	seed := dk.Bytes()
+	// Binary raw.
+	key, err := ParsePrivateKeyForAlgorithm(seed, piv.AlgMLKEM768)
+	if err != nil {
+		t.Fatalf("binary seed: %v", err)
+	}
+	opaque, ok := key.(*piv.OpaquePrivateKey)
+	if !ok || opaque.Algorithm != piv.AlgMLKEM768 || !bytes.Equal(opaque.Raw, seed) {
+		t.Fatalf("binary seed: unexpected key %#v", key)
+	}
+	// Hex and base64.
+	for _, encoded := range []string{hex.EncodeToString(seed), base64.StdEncoding.EncodeToString(seed)} {
+		key, err := ParsePrivateKeyForAlgorithm([]byte(encoded), piv.AlgMLKEM1024)
+		if err != nil {
+			t.Fatalf("encoded seed: %v", err)
+		}
+		if opaque, ok := key.(*piv.OpaquePrivateKey); !ok || opaque.Algorithm != piv.AlgMLKEM1024 || !bytes.Equal(opaque.Raw, seed) {
+			t.Fatalf("encoded seed: unexpected key %#v", key)
+		}
+	}
+	// Wrong length rejects.
+	if _, err := ParsePrivateKeyForAlgorithm(bytes.Repeat([]byte{0xD5}, 32), piv.AlgMLKEM768); err == nil {
+		t.Fatal("expected error for 32-byte input")
 	}
 }
 
@@ -191,6 +436,25 @@ func TestKeyImportEd25519RawSeed(t *testing.T) {
 				t.Fatalf("tag 0x07/32 missing in %X", cmd.Data)
 			}
 		}
+	}
+}
+
+func TestCertImportMLKEMRejects(t *testing.T) {
+	ek := bytes.Repeat([]byte{0x47}, 1184)
+	card := emulator.NewCard()
+	stubSelect(card)
+	stubSlotMetadata(card, piv.AlgMLKEM768, iso7816.EncodeTLV(0x88, ek))
+	path := filepath.Join(t.TempDir(), "cert.der")
+	if err := os.WriteFile(path, []byte{0x30, 0x00}, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	service := NewMutationService(newPQCResolver(card, ""), nil, bytes.NewReader(nil), &bytes.Buffer{})
+	_, err := service.CertImport(context.Background(), CertImportRequest{Global: GlobalOptions{Reader: "YubiKey Test", NonInteractive: true}, Slot: piv.SlotKeyManagement, Path: path})
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected not-supported error, got %v", err)
+	}
+	if hasAPDU(card, 0xDB) {
+		t.Fatal("rejected ML-KEM cert import must not send PUT DATA")
 	}
 }
 
@@ -327,6 +591,28 @@ func TestKeyPublicPQCRawExport(t *testing.T) {
 		if _, err := info2.KeyPublic(context.Background(), ExportRequest{Global: GlobalOptions{Reader: "YubiKey Test", NonInteractive: true}, Slot: piv.SlotSignature, Format: format}); err != nil {
 			t.Fatalf("KeyPublic(%s) error = %v", format, err)
 		}
+	}
+	// ML-KEM keeps the same PEM gap with zero-APDU rejection semantics at
+	// the encode layer, while raw encodings export the 0x88 bytes.
+	kemRaw := bytes.Repeat([]byte{0x47}, 1184)
+	kemCard := emulator.NewCard()
+	stubSelect(kemCard)
+	stubSlotMetadata(kemCard, piv.AlgMLKEM768, iso7816.EncodeTLV(0x88, kemRaw))
+	kemInfo := NewInfoService(newPQCResolver(kemCard, ""))
+	if _, err := kemInfo.KeyPublic(context.Background(), ExportRequest{Global: GlobalOptions{Reader: "YubiKey Test", NonInteractive: true}, Slot: piv.SlotSignature, Format: "pem"}); err == nil {
+		t.Fatal("PEM export of ML-KEM must gap-reject")
+	}
+	kemCard2 := emulator.NewCard()
+	stubSelect(kemCard2)
+	stubSlotMetadata(kemCard2, piv.AlgMLKEM768, iso7816.EncodeTLV(0x88, kemRaw))
+	kemInfo2 := NewInfoService(newPQCResolver(kemCard2, ""))
+	resp, err := kemInfo2.KeyPublic(context.Background(), ExportRequest{Global: GlobalOptions{Reader: "YubiKey Test", NonInteractive: true}, Slot: piv.SlotSignature, Format: "base64"})
+	if err != nil {
+		t.Fatalf("KeyPublic(mlkem768 base64) error = %v", err)
+	}
+	artifact, ok := resp.Result.(ArtifactResult)
+	if !ok || artifact.Kind != "public-key" {
+		t.Fatalf("unexpected result %+v", resp.Result)
 	}
 }
 

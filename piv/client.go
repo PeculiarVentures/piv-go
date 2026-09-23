@@ -227,6 +227,60 @@ func (c *Client) CalculateSecret(slot Slot, peerPublicKey []byte) ([]byte, error
 	return append([]byte(nil), secretTLV.Value...), nil
 }
 
+// Decapsulate performs ML-KEM decapsulation with the slot key and a
+// variant-sized ciphertext: GENERAL AUTHENTICATE 00 87 <alg> <slot> carrying
+// 7C{82 empty, 86 ciphertext} and returning 7C{82 32-byte shared secret}.
+// The algorithm must select an ML-KEM variant and the ciphertext must have
+// the variant length (768/1088/1568 bytes for ML-KEM-512/768/1024); both are
+// validated before any APDU is sent. Encapsulation stays host-side (for
+// example with crypto/mlkem): the card only decapsulates.
+func (c *Client) Decapsulate(algorithm byte, slot Slot, ciphertext []byte) ([]byte, error) {
+	ciphertextLen, ok := MLKEMCiphertextLength(algorithm)
+	if !ok {
+		return nil, fmt.Errorf("piv: unsupported decapsulation algorithm 0x%02X", algorithm)
+	}
+	if len(ciphertext) != ciphertextLen {
+		return nil, fmt.Errorf("piv: unsupported ML-KEM ciphertext length %d for algorithm 0x%02X, must be %d bytes", len(ciphertext), algorithm, ciphertextLen)
+	}
+	inner := iso7816.EncodeTLV(0x82, nil)
+	inner = append(inner, iso7816.EncodeTLV(0x86, ciphertext)...)
+	cmd := &iso7816.Command{
+		Cla:  0x00,
+		Ins:  0x87, // GENERAL AUTHENTICATE
+		P1:   algorithm,
+		P2:   byte(slot),
+		Data: iso7816.EncodeTLV(0x7C, inner),
+		Le:   256,
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("piv: decapsulate with slot %s: %w", slot, err)
+	}
+	if err := resp.Err(); err != nil {
+		return nil, fmt.Errorf("piv: decapsulate with slot %s: %w", slot, err)
+	}
+	tlvs, err := iso7816.ParseAllTLV(resp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("piv: parse decapsulate response: %w", err)
+	}
+	authTLV := iso7816.FindTag(tlvs, 0x7C)
+	if authTLV == nil {
+		return nil, fmt.Errorf("piv: auth response tag 0x7C not found")
+	}
+	innerTLVs, err := iso7816.ParseAllTLV(authTLV.Value)
+	if err != nil {
+		return nil, fmt.Errorf("piv: parse auth template: %w", err)
+	}
+	secretTLV := iso7816.FindTag(innerTLVs, 0x82)
+	if secretTLV == nil {
+		return nil, fmt.Errorf("piv: secret tag 0x82 not found")
+	}
+	if len(secretTLV.Value) != 32 {
+		return nil, fmt.Errorf("piv: unexpected KEM secret length %d", len(secretTLV.Value))
+	}
+	return append([]byte(nil), secretTLV.Value...), nil
+}
+
 func (c *Client) sendCommand(cmd *iso7816.Command) (*iso7816.Response, error) {
 	raw, err := c.card.Transmit(cmd.Bytes())
 	if err != nil {

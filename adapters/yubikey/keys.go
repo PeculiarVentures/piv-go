@@ -32,9 +32,6 @@ func (a *Adapter) GenerateKey(session *adapters.Session, slot piv.Slot, algorith
 	if err := requireSessionClient(session); err != nil {
 		return nil, err
 	}
-	if piv.IsMLKEMAlgorithm(algorithm) {
-		return nil, fmt.Errorf("generate YubiKey key in slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
-	}
 	session.Observe(adapters.LogLevelInfo, a, "generate-key", "starting YubiKey key generation for %s", slot)
 	if err := session.AuthenticateManagementKey(a); err != nil {
 		return nil, fmt.Errorf("authenticate management key: %w", err)
@@ -62,7 +59,13 @@ func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm 
 	if err := requireSessionClient(session); err != nil {
 		return err
 	}
-	if piv.IsMLKEMAlgorithm(algorithm) || piv.IsMLDSAAlgorithm(algorithm) {
+	if piv.IsMLDSAAlgorithm(algorithm) {
+		return fmt.Errorf("import YubiKey key into slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
+	}
+	if algorithm == piv.AlgMLKEM512 {
+		// The card accepts ML-KEM-512 seeds, but storing the imported
+		// public key object requires the encapsulation key and the
+		// standard library has no ML-KEM-512 implementation.
 		return fmt.Errorf("import YubiKey key into slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
 	}
 	session.Observe(adapters.LogLevelInfo, a, "import-key", "starting YubiKey key import for %s", slot)
@@ -73,7 +76,7 @@ func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm 
 	if err := session.Client.ImportKey(slot, algorithm, privateKey, pinPolicy, touchPolicy); err != nil {
 		return fmt.Errorf("import YubiKey key into slot %s: %w", slot, err)
 	}
-	publicKey, err := importedPublicKey(privateKey)
+	publicKey, err := importedPublicKey(algorithm, privateKey)
 	if err != nil {
 		return fmt.Errorf("resolve imported YubiKey public key for slot %s: %w", slot, err)
 	}
@@ -86,8 +89,12 @@ func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm 
 }
 
 // importedPublicKey derives the public half of an imported private key for
-// storage in the slot's standard PIV object.
-func importedPublicKey(privateKey crypto.PrivateKey) (crypto.PublicKey, error) {
+// storage in the slot's standard PIV object. The requested algorithm
+// supplies context for opaque and raw inputs: Ed25519/X25519 resolve a
+// 32-byte seed, while ML-KEM-768/1024 expand the 64-byte seed into the
+// encapsulation key with the standard library. ML-KEM-512 has no standard
+// library implementation and gap-rejects without an APDU.
+func importedPublicKey(algorithm byte, privateKey crypto.PrivateKey) (crypto.PublicKey, error) {
 	switch key := privateKey.(type) {
 	case *rsa.PrivateKey:
 		return &key.PublicKey, nil
@@ -112,20 +119,27 @@ func importedPublicKey(privateKey crypto.PrivateKey) (crypto.PublicKey, error) {
 		if key == nil {
 			return nil, fmt.Errorf("unsupported nil opaque private key: not supported by this release")
 		}
-		return opaqueImportPublicKey(key.Algorithm, key.Raw)
+		return opaqueImportPublicKey(algorithm, key.Algorithm, key.Raw)
 	case piv.OpaquePrivateKey:
-		return opaqueImportPublicKey(key.Algorithm, key.Raw)
+		return opaqueImportPublicKey(algorithm, key.Algorithm, key.Raw)
 	case []byte:
-		if len(key) != 32 {
-			return nil, fmt.Errorf("unsupported raw private key length %d: not supported by this release", len(key))
-		}
-		return &piv.OpaquePublicKey{Raw: append([]byte(nil), key...)}, nil
+		return opaqueImportPublicKey(algorithm, algorithm, key)
 	default:
 		return nil, fmt.Errorf("unsupported private key type %T: not supported by this release", privateKey)
 	}
 }
 
-func opaqueImportPublicKey(algorithm byte, raw []byte) (crypto.PublicKey, error) {
+func opaqueImportPublicKey(requestedAlgorithm byte, keyAlgorithm byte, raw []byte) (crypto.PublicKey, error) {
+	if piv.IsMLKEMAlgorithm(requestedAlgorithm) {
+		if keyAlgorithm != 0 && keyAlgorithm != requestedAlgorithm {
+			return nil, fmt.Errorf("unsupported import: key algorithm 0x%02X does not match requested algorithm 0x%02X: not supported by this release", keyAlgorithm, requestedAlgorithm)
+		}
+		ek, err := piv.MLKEMEncapsulationKeyFromSeed(requestedAlgorithm, raw)
+		if err != nil {
+			return nil, fmt.Errorf("%v: not supported by this release", err)
+		}
+		return &piv.OpaquePublicKey{Algorithm: requestedAlgorithm, Raw: ek}, nil
+	}
 	if len(raw) != 32 {
 		return nil, fmt.Errorf("unsupported raw private key length %d: not supported by this release", len(raw))
 	}
@@ -133,7 +147,7 @@ func opaqueImportPublicKey(algorithm byte, raw []byte) (crypto.PublicKey, error)
 	// implementation; the stored object keeps the seed bytes so a later
 	// metadata read with algorithm context can resolve the key. Generation
 	// flows overwrite this with the real public key.
-	return &piv.OpaquePublicKey{Algorithm: algorithm, Raw: append([]byte(nil), raw...)}, nil
+	return &piv.OpaquePublicKey{Algorithm: keyAlgorithm, Raw: append([]byte(nil), raw...)}, nil
 }
 
 // CalculateSecret performs X25519 ECDH key agreement with the slot key.
@@ -145,6 +159,21 @@ func (a *Adapter) CalculateSecret(session *adapters.Session, slot piv.Slot, peer
 	secret, err := session.Client.CalculateSecret(slot, peerPublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("calculate YubiKey ECDH secret for slot %s: %w", slot, err)
+	}
+	return secret, nil
+}
+
+// Decapsulate performs ML-KEM decapsulation with the slot key and a
+// variant-sized ciphertext, passing the call through to the PIV client.
+// Encapsulation stays host-side; the card only decapsulates.
+func (a *Adapter) Decapsulate(session *adapters.Session, slot piv.Slot, algorithm byte, ciphertext []byte) ([]byte, error) {
+	if err := requireSessionClient(session); err != nil {
+		return nil, err
+	}
+	session.Observe(adapters.LogLevelDebug, a, "decapsulate", "issuing GENERAL AUTHENTICATE decapsulation for %s", slot)
+	secret, err := session.Client.Decapsulate(algorithm, slot, ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decapsulate YubiKey KEM secret for slot %s: %w", slot, err)
 	}
 	return secret, nil
 }

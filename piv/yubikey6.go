@@ -1,6 +1,9 @@
 package piv
 
-import "fmt"
+import (
+	"crypto/mlkem"
+	"fmt"
+)
 
 // OpaquePublicKey carries the raw public key bytes for YubiKey 6 algorithms
 // without a Go standard-library representation (Ed25519/X25519 raw keys and
@@ -42,8 +45,9 @@ func (e *UnsupportedPublicKeyError) Error() string {
 // IsYubiKey6Algorithm reports whether the algorithm identifier belongs to
 // the YubiKey 6 extension set. Extension algorithms are recognized for key
 // discovery and display; per the pqc-v1 matrix most card operations are
-// implemented (RSA-3072/4096, Ed25519, X25519 key agreement, ML-DSA) while
-// ML-KEM remains a gap without an APDU flow.
+// implemented (RSA-3072/4096, Ed25519, X25519 key agreement, ML-DSA, and
+// ML-KEM generate/import/decapsulation) while ML-KEM signing, on-card
+// encapsulation, and certificate import remain gaps.
 func IsYubiKey6Algorithm(algorithm byte) bool {
 	switch algorithm {
 	case AlgRSA3072, AlgRSA4096,
@@ -105,15 +109,16 @@ func inferOpaqueAlgorithm(tag uint, length int) (byte, bool) {
 // OpaquePrivateKey carries raw private key material for YubiKey 6 algorithms
 // without a Go standard-library private key representation. Algorithm holds
 // the PIV algorithm identifier (for example AlgEd25519) and Raw holds the
-// card encoding verbatim: 32-byte raw seed for Ed25519/X25519.
+// card encoding verbatim: 32-byte raw seed for Ed25519/X25519, and the
+// 64-byte raw seed (FIPS 203 d||z) for ML-KEM import.
 type OpaquePrivateKey struct {
 	Algorithm byte
 	Raw       []byte
 }
 
 // IsMLKEMAlgorithm reports whether the identifier selects an ML-KEM variant.
-// ML-KEM has no KEM APDU flow in this release: every card-touching operation
-// gap-rejects without sending an APDU.
+// ML-KEM supports on-card generation, import, and decapsulation; signing,
+// on-card encapsulation, and certificate import stay unsupported.
 func IsMLKEMAlgorithm(algorithm byte) bool {
 	switch algorithm {
 	case AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024:
@@ -130,6 +135,59 @@ func IsMLDSAAlgorithm(algorithm byte) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// MLKEMSeedLength is the raw seed size (FIPS 203 d||z) accepted by
+// IMPORT KEY tag 0x0A for every ML-KEM variant. The card expands the seed
+// into the full decapsulation key internally and reports the encapsulation
+// key (tag 0x88) through slot metadata.
+const MLKEMSeedLength = 64
+
+// MLKEMCiphertextLength returns the ciphertext size for an ML-KEM variant:
+// 768 bytes for ML-KEM-512, 1088 for ML-KEM-768, and 1568 for ML-KEM-1024
+// (FIPS 203).
+func MLKEMCiphertextLength(algorithm byte) (int, bool) {
+	switch algorithm {
+	case AlgMLKEM512:
+		return 768, true
+	case AlgMLKEM768:
+		return 1088, true
+	case AlgMLKEM1024:
+		return 1568, true
+	default:
+		return 0, false
+	}
+}
+
+// MLKEMEncapsulationKeyFromSeed derives the encapsulation (public) key from
+// a raw ML-KEM seed (FIPS 203 d||z, 64 bytes) using the standard library.
+// ML-KEM-768 and ML-KEM-1024 are supported; ML-KEM-512 has no standard
+// library implementation and reports an unsupported-algorithm error so
+// callers can gap-reject without sending an APDU. Unknown algorithms and
+// wrong seed lengths are rejected before any use of the bytes.
+func MLKEMEncapsulationKeyFromSeed(algorithm byte, seed []byte) ([]byte, error) {
+	if !IsMLKEMAlgorithm(algorithm) {
+		return nil, fmt.Errorf("piv: unsupported ML-KEM algorithm 0x%02X", algorithm)
+	}
+	if len(seed) != MLKEMSeedLength {
+		return nil, fmt.Errorf("piv: unsupported ML-KEM seed length %d for algorithm 0x%02X, must be %d bytes", len(seed), algorithm, MLKEMSeedLength)
+	}
+	switch algorithm {
+	case AlgMLKEM768:
+		key, err := mlkem.NewDecapsulationKey768(seed)
+		if err != nil {
+			return nil, fmt.Errorf("piv: expand ML-KEM-768 seed: %w", err)
+		}
+		return key.EncapsulationKey().Bytes(), nil
+	case AlgMLKEM1024:
+		key, err := mlkem.NewDecapsulationKey1024(seed)
+		if err != nil {
+			return nil, fmt.Errorf("piv: expand ML-KEM-1024 seed: %w", err)
+		}
+		return key.EncapsulationKey().Bytes(), nil
+	default:
+		return nil, unsupportedExtendedAlgorithmError("ML-KEM public key derivation", algorithm)
 	}
 }
 

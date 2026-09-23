@@ -2,6 +2,7 @@ package yubikey
 
 import (
 	"bytes"
+	"crypto/mlkem"
 	"testing"
 
 	"github.com/PeculiarVentures/piv-go/emulator"
@@ -26,6 +27,7 @@ func TestYubiKeyAdapterGenerateKeyPQC(t *testing.T) {
 		{name: "ed25519", algorithm: piv.AlgEd25519, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, bytes.Repeat([]byte{0x41}, 32)))},
 		{name: "x25519", algorithm: piv.AlgX25519, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, bytes.Repeat([]byte{0x42}, 32)))},
 		{name: "mldsa44", algorithm: piv.AlgMLDSA44, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x87, bytes.Repeat([]byte{0x43}, 1312)))},
+		{name: "mlkem768", algorithm: piv.AlgMLKEM768, response: iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x88, bytes.Repeat([]byte{0x47}, 1184)))},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -77,6 +79,55 @@ func TestYubiKeyAdapterImportKeyPQC(t *testing.T) {
 			t.Fatal("expected IMPORT KEY command")
 		}
 	})
+	t.Run("mlkem768 seed tag 0A stores derived ek", func(t *testing.T) {
+		dk, err := mlkem.GenerateKey768()
+		if err != nil {
+			t.Fatalf("GenerateKey768() error = %v", err)
+		}
+		seed := dk.Bytes()
+		wantEK := dk.EncapsulationKey().Bytes()
+		mock := emulator.NewCard()
+		enqueueManagementAuth(mock)
+		mock.SetSuccessResponse(InsImportKey, nil)
+		mock.SetSuccessResponse(0xDB, nil)
+		if err := NewAdapter().ImportKey(newYubiKeyPolicySession(mock), piv.SlotKeyManagement, piv.AlgMLKEM768, &piv.OpaquePrivateKey{Algorithm: piv.AlgMLKEM768, Raw: seed}, 0x00, 0x00); err != nil {
+			t.Fatalf("ImportKey() error = %v", err)
+		}
+		cmd := findCommand(mock, InsImportKey)
+		if cmd == nil {
+			t.Fatal("expected IMPORT KEY command")
+		}
+		if cmd[2] != piv.AlgMLKEM768 {
+			t.Fatalf("P1 = 0x%02X, want 0xE6", cmd[2])
+		}
+		parsed, err := iso7816.ParseCommand(cmd)
+		if err != nil {
+			t.Fatalf("parse import: %v", err)
+		}
+		tlvs, _ := iso7816.ParseAllTLV(parsed.Data)
+		if field := iso7816.FindTag(tlvs, 0x0A); field == nil || !bytes.Equal(field.Value, seed) {
+			t.Fatalf("tag 0x0A must carry the 64-byte seed in %X", parsed.Data[:16])
+		}
+		// The stored slot object must carry the derived encapsulation
+		// key under tag 0x88. Large keys span chunked PUT DATA writes,
+		// so concatenate every parsed 0xDB payload before searching.
+		var stored []byte
+		for _, raw := range mock.TransmittedCommands {
+			if len(raw) > 1 && raw[1] == 0xDB {
+				chunk, err := iso7816.ParseCommand(raw)
+				if err != nil {
+					t.Fatalf("parse PUT DATA: %v", err)
+				}
+				stored = append(stored, chunk.Data...)
+			}
+		}
+		if len(stored) == 0 {
+			t.Fatal("expected PUT DATA storing the imported public key")
+		}
+		if !bytes.Contains(stored, wantEK) {
+			t.Fatal("stored slot object must contain the derived encapsulation key")
+		}
+	})
 }
 
 func TestYubiKeyAdapterCalculateSecret(t *testing.T) {
@@ -97,6 +148,35 @@ func TestYubiKeyAdapterCalculateSecret(t *testing.T) {
 	}
 	if cmd[2] != piv.AlgX25519 {
 		t.Fatalf("P1 = 0x%02X, want 0xE1", cmd[2])
+	}
+}
+
+func TestYubiKeyAdapterDecapsulate(t *testing.T) {
+	ciphertext := bytes.Repeat([]byte{0xC7}, 1088)
+	secret := bytes.Repeat([]byte{0x5E}, 32)
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, secret)))
+	got, err := NewAdapter().Decapsulate(newYubiKeyPolicySession(mock), piv.SlotKeyManagement, piv.AlgMLKEM768, ciphertext)
+	if err != nil {
+		t.Fatalf("Decapsulate() error = %v", err)
+	}
+	if !bytes.Equal(got, secret) {
+		t.Fatal("secret must round-trip verbatim")
+	}
+	cmd := findCommand(mock, 0x87)
+	if cmd == nil {
+		t.Fatal("expected GENERAL AUTHENTICATE command")
+	}
+	if cmd[2] != piv.AlgMLKEM768 {
+		t.Fatalf("P1 = 0x%02X, want 0xE6", cmd[2])
+	}
+	// Wrong ciphertext length rejects before any APDU.
+	bad := emulator.NewCard()
+	if _, err := NewAdapter().Decapsulate(newYubiKeyPolicySession(bad), piv.SlotKeyManagement, piv.AlgMLKEM768, []byte{0x01}); err == nil {
+		t.Fatal("expected error for short ciphertext")
+	}
+	if len(bad.TransmittedCommands) != 0 {
+		t.Fatalf("no APDU must be sent on rejection, got %d commands", len(bad.TransmittedCommands))
 	}
 }
 

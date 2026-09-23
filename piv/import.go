@@ -55,14 +55,17 @@ const (
 // 192/256, and Ed25519/X25519 import a 32-byte raw seed via tags 0x07/0x08.
 // Ed25519 accepts ed25519.PrivateKey (seed taken from the first 32 bytes),
 // X25519 accepts *ecdh.PrivateKey, and both accept *OpaquePrivateKey,
-// OpaquePrivateKey, or a raw 32-byte []byte. ML-DSA and ML-KEM have no import
-// APDU and gap-reject without sending a command. The algorithm byte
-// selects the key type and must match the private key. Policy value 0x00
-// (default) omits the corresponding tag, in which case the device applies its
-// own default policy instead of preserving the slot's previous policy; values
-// above 0x03 are rejected.
+// OpaquePrivateKey, or a raw 32-byte []byte. ML-KEM imports the 64-byte raw
+// seed (FIPS 203 d||z, identical for all variants) via tag 0x0A, accepting
+// *OpaquePrivateKey, OpaquePrivateKey, or a raw []byte; the card expands the
+// seed into the full decapsulation key internally. ML-DSA has no import
+// APDU and gap-rejects without sending a command. The
+// algorithm byte selects the key type and must match the private key. Policy
+// value 0x00 (default) omits the corresponding tag, in which case the device
+// applies its own default policy instead of preserving the slot's previous
+// policy; values above 0x03 are rejected.
 func (c *Client) ImportKey(slot Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
-	if IsMLKEMAlgorithm(algorithm) || IsMLDSAAlgorithm(algorithm) {
+	if IsMLDSAAlgorithm(algorithm) {
 		return unsupportedExtendedAlgorithmError("import", algorithm)
 	}
 	data, err := encodeImportKeyData(algorithm, privateKey, pinPolicy, touchPolicy)
@@ -225,24 +228,32 @@ func paddedBigInt(value *big.Int, length int) []byte {
 	return padded
 }
 
-// opaqueImportFields validates a 32-byte raw seed for Ed25519/X25519 import
-// and resolves the IMPORT KEY tag: 0x07 for Ed25519, 0x08 for X25519. A zero
-// key algorithm defers to the requested algorithm.
+// opaqueImportFields validates raw private key material for Ed25519/X25519
+// and ML-KEM import and resolves the IMPORT KEY tag: 0x07 for Ed25519,
+// 0x08 for X25519, and 0x0A for ML-KEM. Ed25519/X25519 take a 32-byte raw
+// seed; ML-KEM takes the 64-byte raw seed (FIPS 203 d||z, identical for all
+// variants), which the card expands into the full decapsulation key. A zero
+// key algorithm defers to the requested algorithm. Algorithm mismatch and
+// wrong lengths are rejected before any APDU is sent.
 func opaqueImportFields(requestedAlgorithm byte, keyAlgorithm byte, raw []byte) ([]byte, uint, error) {
 	var tag uint
+	wantLen := 32
 	switch requestedAlgorithm {
 	case AlgEd25519:
 		tag = 0x07
 	case AlgX25519:
 		tag = 0x08
+	case AlgMLKEM512, AlgMLKEM768, AlgMLKEM1024:
+		tag = 0x0A
+		wantLen = MLKEMSeedLength
 	default:
 		return nil, 0, fmt.Errorf("piv: unsupported import algorithm 0x%02X for raw private key", requestedAlgorithm)
 	}
 	if keyAlgorithm != 0 && keyAlgorithm != requestedAlgorithm {
 		return nil, 0, fmt.Errorf("piv: unsupported import: key algorithm 0x%02X does not match requested algorithm 0x%02X", keyAlgorithm, requestedAlgorithm)
 	}
-	if len(raw) != 32 {
-		return nil, 0, fmt.Errorf("piv: unsupported raw private key length %d, must be 32 bytes", len(raw))
+	if len(raw) != wantLen {
+		return nil, 0, fmt.Errorf("piv: unsupported raw private key length %d for algorithm 0x%02X, must be %d bytes", len(raw), requestedAlgorithm, wantLen)
 	}
 	return append([]byte(nil), raw...), tag, nil
 }
