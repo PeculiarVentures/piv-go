@@ -49,6 +49,17 @@ type KeyDeletionAdapter interface {
 	DeleteKey(session *Session, slot piv.Slot) error
 }
 
+// KeyAttestationAdapter defines device-specific key attestation behavior.
+//
+// Tokens that can prove a slot key was generated on-device implement this
+// capability to encapsulate the required APDU sequence. The returned bytes
+// are the raw DER-encoded X.509 attestation certificate without verification.
+type KeyAttestationAdapter interface {
+	// AttestKey returns the raw DER attestation certificate for the key in
+	// the specified slot.
+	AttestKey(session *Session, slot piv.Slot) ([]byte, error)
+}
+
 // KeyGenerationPolicyAdapter defines key generation with explicit YubiKey
 // PIN/touch policies. Adapters that do not implement it fall back to the
 // standard generation flow, which only supports default policies.

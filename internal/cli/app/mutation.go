@@ -172,6 +172,9 @@ func NewMutationService(targets *TargetResolver, planner *OperationPlanner, inpu
 
 // CertImport installs a certificate into a slot.
 func (s *MutationService) CertImport(ctx context.Context, request CertImportRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	inputData, err := ReadInputFile(request.Path, s.input)
 	if err != nil {
 		return Response{}, err
@@ -209,6 +212,9 @@ func (s *MutationService) CertImport(ctx context.Context, request CertImportRequ
 
 // CertDelete deletes a certificate from a slot.
 func (s *MutationService) CertDelete(ctx context.Context, request DeleteRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
@@ -248,6 +254,9 @@ func (s *MutationService) CertDelete(ctx context.Context, request DeleteRequest)
 
 // KeyGenerate generates a new slot key.
 func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
@@ -283,6 +292,9 @@ func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRe
 
 // KeyImport imports a private key into a slot.
 func (s *MutationService) KeyImport(ctx context.Context, request KeyImportRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	if request.Algorithm != piv.AlgECCP256 && request.Algorithm != piv.AlgRSA2048 {
 		return Response{}, UsageError(fmt.Sprintf("unsupported import algorithm %q", request.AlgorithmName), "use p256 or rsa2048")
 	}
@@ -357,6 +369,9 @@ func checkImportKeyMatch(algorithm byte, privateKey crypto.PrivateKey) error {
 
 // KeyDelete deletes a slot key.
 func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, managementKey SecretRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
@@ -404,6 +419,9 @@ func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, 
 
 // KeySign signs input data with a slot key.
 func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	resolver := s.resolver(request.Global)
 	payload, err := ReadInputFile(request.InputPath, s.input)
 	if err != nil {
@@ -450,6 +468,9 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 
 // KeyChallenge runs GENERAL AUTHENTICATE with a supplied challenge.
 func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	resolver := s.resolver(request.Global)
 	challenge, err := hex.DecodeString(strings.TrimSpace(strings.ReplaceAll(request.ChallengeHex, " ", "")))
 	if err != nil || len(challenge) == 0 {
@@ -751,6 +772,9 @@ func (s *MutationService) SetupReset(ctx context.Context, request SetupResetRequ
 
 // SetupResetSlot resets one slot.
 func (s *MutationService) SetupResetSlot(ctx context.Context, request SetupResetSlotRequest) (Response, error) {
+	if err := rejectAttestationSlot(request.Slot); err != nil {
+		return Response{}, err
+	}
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {

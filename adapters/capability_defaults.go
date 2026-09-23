@@ -64,6 +64,7 @@ func defaultCapabilityReport(adapter Adapter) CapabilityReport {
 		{ID: CapabilityChangeManagementKey, Label: "Change Management Key", Support: supportForManagementKeyChange(adapter)},
 		{ID: CapabilityResetSlot, Label: "Reset Slot", Support: supportForSlotReset(adapter)},
 		{ID: CapabilityResetToken, Label: "Reset Token", Support: supportForTokenReset(adapter), Notes: "requires PIN and PUK to be blocked"},
+		{ID: CapabilityAttestKey, Label: "Attest Key", Support: supportForAttestation(adapter)},
 	}
 
 	return CapabilityReport{AdapterName: adapterName, Items: items}

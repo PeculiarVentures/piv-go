@@ -296,6 +296,60 @@ func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Res
 	return response, nil
 }
 
+// Attest exports the attestation certificate for a slot key in PEM or DER
+// format. Attestation is a read-only vendor operation: tokens without a
+// KeyAttestationAdapter report it as unsupported.
+func (s *InfoService) Attest(ctx context.Context, request ExportRequest) (Response, error) {
+	if isAttestationSlot(request.Slot) {
+		return Response{}, UnsupportedError("attestation is not supported for slot F9", "attest one of auth, sign, key-mgmt, or card-auth")
+	}
+	target, err := s.targets.Resolve(ctx, request.Global)
+	if err != nil {
+		return Response{}, err
+	}
+	defer func() {
+		_ = target.Close()
+	}()
+
+	attestationDER, err := attestKey(target.Runtime, request.Slot)
+	if err != nil {
+		return Response{}, err
+	}
+	format := request.Format
+	if format == "" {
+		format = request.Global.DefaultCertFmt
+	}
+	if format == "" {
+		format = "pem"
+	}
+	encoded, err := EncodeCertificate(attestationDER, format)
+	if err != nil {
+		return Response{}, err
+	}
+	result := ArtifactResult{Kind: "attestation", Format: strings.ToLower(format), Size: len(encoded)}
+	if request.Out != "" {
+		if err := os.WriteFile(request.Out, encoded, 0o644); err != nil {
+			return Response{}, IOError("unable to write attestation output", "check the output path and permissions", err)
+		}
+		result.Path = request.Out
+	} else if request.Global.JSON {
+		if strings.EqualFold(format, "der") {
+			result.Data = base64.StdEncoding.EncodeToString(encoded)
+			result.Encoding = "base64"
+		} else {
+			result.Data = string(encoded)
+		}
+	} else {
+		result.Data = string(encoded)
+	}
+	response := Response{Command: "key-attest", Target: target.Summary, Result: result}
+	if request.Out == "" {
+		response.rawOutput = encoded
+	}
+	response.traceLines = target.TraceLines()
+	return response, nil
+}
+
 // PINStatus reports the card PIN retry state.
 func (s *InfoService) PINStatus(ctx context.Context, request StatusRequest) (Response, error) {
 	target, err := s.targets.Resolve(ctx, request.Global)

@@ -278,7 +278,7 @@ func (c *cli) newSetupCommand() *cobra.Command {
 		Short: "Reset one slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
+			slot, err := app.ParseSlotForMutation(args[0])
 			if err != nil {
 				return err
 			}

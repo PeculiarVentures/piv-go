@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/PeculiarVentures/piv-go/adapters/yubikey"
 	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
@@ -59,10 +60,19 @@ var objectNameMap = func() map[string]uint {
 }()
 
 // ParseSlot resolves a canonical or hexadecimal slot selector.
+//
+// The YubiKey attestation aliases "attestation" and "f9" resolve to the
+// vendor attestation slot (0xF9) served from the attestation certificate
+// object; use them with piv cert export to read the long-lived attestation
+// certificate. Commands that modify the token must use ParseSlotForMutation
+// instead so the read-only attestation slot is rejected before any APDU.
 func ParseSlot(value string) (piv.Slot, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	if slot, ok := slotNameMap[normalized]; ok {
 		return slot, nil
+	}
+	if normalized == "attestation" || normalized == "f9" {
+		return yubikey.SlotAttestation, nil
 	}
 	normalized = strings.TrimPrefix(normalized, "0x")
 	parsed, err := strconv.ParseUint(normalized, 16, 8)
@@ -71,11 +81,42 @@ func ParseSlot(value string) (piv.Slot, error) {
 	}
 	slot := piv.Slot(parsed)
 	switch slot {
-	case piv.SlotAuthentication, piv.SlotManagement, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth:
+	case piv.SlotAuthentication, piv.SlotManagement, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth, yubikey.SlotAttestation:
 		return slot, nil
 	default:
 		return 0, UsageError(fmt.Sprintf("unsupported slot %q", value), "use auth, sign, key-mgmt, card-auth, or a hexadecimal alias such as 9a")
 	}
+}
+
+// ParseSlotForMutation resolves a slot selector for commands that modify the
+// token. The YubiKey attestation slot (F9) is read-only and is rejected before
+// any APDU reaches the token: overwriting it would destroy the factory
+// attestation key.
+func ParseSlotForMutation(value string) (piv.Slot, error) {
+	slot, err := ParseSlot(value)
+	if err != nil {
+		return 0, err
+	}
+	if err := rejectAttestationSlot(slot); err != nil {
+		return 0, err
+	}
+	return slot, nil
+}
+
+// isAttestationSlot reports whether the slot is the read-only YubiKey
+// attestation slot (0xF9).
+func isAttestationSlot(slot piv.Slot) bool {
+	return slot == yubikey.SlotAttestation
+}
+
+// rejectAttestationSlot rejects the read-only YubiKey attestation slot for
+// token-modifying operations. Callers must invoke it before opening the
+// target so a rejected slot never produces an APDU.
+func rejectAttestationSlot(slot piv.Slot) error {
+	if isAttestationSlot(slot) {
+		return UsageError("attestation slot F9 is read-only", "use cert export to read the attestation certificate")
+	}
+	return nil
 }
 
 // SlotName returns the canonical human-readable slot name.
