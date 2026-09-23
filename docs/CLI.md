@@ -129,9 +129,10 @@ to require touch confirmation for management operations.
 - Sign implements Ed25519 and ML-DSA over the raw message
   (`00 87 <alg> <slot> 7C{82 empty, 81 msg}`). RSA-3072/4096 apply host-side
   PKCS#1 v1.5 type-1 formatting so the challenge is exactly modulus-length
-  (384/512 bytes): a 32-byte message is DigestInfo-wrapped as SHA-256
-  (matching `--hash sha256`); any other length is type-1 padded raw
-  (matching `--hash none`). X25519 cannot sign and ML-KEM has no sign
+  (384/512 bytes). The format is selected explicitly via `--hash`:
+  `--hash sha256` requires a 32-byte message and DigestInfo-wraps it as
+  SHA-256, while `--hash none` type-1 pads the message raw without
+  DigestInfo. X25519 cannot sign and ML-KEM has no sign
   flow: `key sign` and `key challenge` reject with
   `x25519 cannot sign: use ECDH` (exit 4) and `not supported` (exit 4)
   respectively.
