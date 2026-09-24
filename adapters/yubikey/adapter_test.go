@@ -297,8 +297,12 @@ func TestYubiKeyAdapterDeleteKeyReportsUnsupportedFirmware(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported firmware error")
 	}
-	if !strings.Contains(err.Error(), "firmware 5.6.0 does not support key deletion") {
-		t.Fatalf("unexpected error: %v", err)
+	want := "delete YubiKey key from slot 9A: key deletion is not supported on firmware 5.6.0, requires 5.7.0 or later"
+	if err.Error() != want {
+		t.Fatalf("unexpected error: %q, want %q", err.Error(), want)
+	}
+	if strings.Count(err.Error(), "\n") != 0 {
+		t.Fatalf("delete-key error must be a single line, got %q", err.Error())
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/x509"
 	"fmt"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
@@ -201,6 +202,12 @@ func (a *Adapter) Decapsulate(session *adapters.Session, slot piv.Slot, algorith
 }
 
 // ReadPublicKey reads the slot public key, preferring YubiKey slot metadata.
+// Firmwares without GET METADATA (for example YubiKey NEO) share the slot
+// object between the certificate and the public key template: importing a
+// certificate replaces the template, so when the standard public key object
+// carries no 7F49 template but a parseable certificate is present, the key
+// is served from the certificate. When both are absent the original public
+// key error is returned untouched so callers keep the not-found mapping.
 func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypto.PublicKey, error) {
 	if err := requireSessionClient(session); err != nil {
 		return nil, err
@@ -212,7 +219,20 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 		return metadata.PublicKey, nil
 	}
 	session.Observe(adapters.LogLevelDebug, a, "read-public-key", "falling back to standard PIV public key object for %s", slot)
-	return session.Client.ReadPublicKey(slot)
+	publicKey, err := session.Client.ReadPublicKey(slot)
+	if err == nil {
+		return publicKey, nil
+	}
+	certData, certErr := session.Client.ReadCertificate(slot)
+	if certErr != nil {
+		return nil, err
+	}
+	cert, parseErr := x509.ParseCertificate(certData)
+	if parseErr != nil {
+		return nil, err
+	}
+	session.Observe(adapters.LogLevelDebug, a, "read-public-key", "using public key from slot certificate for %s", slot)
+	return cert.PublicKey, nil
 }
 
 // DeleteKey removes a private key from a YubiKey slot.
@@ -238,9 +258,9 @@ func (a *Adapter) DeleteKey(session *adapters.Session, slot piv.Slot) error {
 		if iso7816.IsStatus(err, iso7816.SwInsNotSupported) {
 			session.Observe(adapters.LogLevelInfo, a, "delete-key", "firmware rejected key deletion command, checking device version")
 			if version, versionErr := readVersion(session.Client); versionErr == nil {
-				return fmt.Errorf("delete YubiKey key from slot %s: firmware %s does not support key deletion, requires 5.7.0 or later", slot, version)
+				return fmt.Errorf("delete YubiKey key from slot %s: key deletion is not supported on firmware %s, requires 5.7.0 or later", slot, version)
 			}
-			return fmt.Errorf("delete YubiKey key from slot %s: firmware does not support key deletion, requires 5.7.0 or later", slot)
+			return fmt.Errorf("delete YubiKey key from slot %s: key deletion is not supported on this firmware, requires 5.7.0 or later", slot)
 		}
 		return fmt.Errorf("delete YubiKey key from slot %s: %w", slot, err)
 	}

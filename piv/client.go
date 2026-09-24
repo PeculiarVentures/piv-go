@@ -118,7 +118,20 @@ func (c *Client) Sign(alg byte, slot Slot, data []byte, hashMode RSASignHashMode
 		}
 		data = padded
 	}
-	resp, err := c.sendCommand(generalAuthenticateCommand(alg, slot, data))
+	authCmd := generalAuthenticateCommand(alg, slot, data)
+	var (
+		resp *iso7816.Response
+		err  error
+	)
+	if alg == AlgRSA1024 || alg == AlgRSA2048 {
+		// RSA-1024/2048 also run on legacy firmware without
+		// extended-APDU support: chain oversized challenges (CLA 0x10)
+		// instead of sending one extended-length AUTHENTICATE.
+		// Extension algorithms keep the proven extended form.
+		resp, err = c.sendAuthenticate(authCmd)
+	} else {
+		resp, err = c.sendCommand(authCmd)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("piv: sign with slot %s: %w", slot, err)
 	}
@@ -146,6 +159,49 @@ func (c *Client) Sign(alg byte, slot Slot, data []byte, hashMode RSASignHashMode
 		return nil, fmt.Errorf("piv: signature tag 0x82 not found")
 	}
 	return sigTLV.Value, nil
+}
+
+// sendAuthenticate issues an RSA-1024/2048 GENERAL AUTHENTICATE command,
+// splitting payloads above the short-APDU limit into chained commands (CLA
+// 0x10 intermediates, CLA 0x00 final), mirroring ykman and PutData. Legacy
+// firmware without extended-APDU support (for example YubiKey NEO) rejects
+// a single extended-length AUTHENTICATE with 6700, while host-padded RSA
+// challenges always exceed 255 bytes. Payloads within the short limit go
+// out byte-for-byte as before, and the challenge padding itself is
+// untouched: callers format data before this point.
+func (c *Client) sendAuthenticate(cmd *iso7816.Command) (*iso7816.Response, error) {
+	if len(cmd.Data) <= 0xFF {
+		return c.sendCommand(cmd)
+	}
+	const maxChunkSize = 216
+	data := cmd.Data
+	for len(data) > maxChunkSize {
+		chunk := &iso7816.Command{
+			Cla:  0x10,
+			Ins:  cmd.Ins,
+			P1:   cmd.P1,
+			P2:   cmd.P2,
+			Data: data[:maxChunkSize],
+			Le:   -1,
+		}
+		resp, err := c.sendCommand(chunk)
+		if err != nil {
+			return nil, err
+		}
+		if err := resp.Err(); err != nil {
+			return nil, err
+		}
+		data = data[maxChunkSize:]
+	}
+	final := &iso7816.Command{
+		Cla:  cmd.Cla,
+		Ins:  cmd.Ins,
+		P1:   cmd.P1,
+		P2:   cmd.P2,
+		Data: data,
+		Le:   cmd.Le,
+	}
+	return c.sendCommand(final)
 }
 
 // Execute sends an arbitrary ISO 7816 command through the client transport.

@@ -187,7 +187,7 @@ func NewMutationService(targets *TargetResolver, planner *OperationPlanner, inpu
 // default; pass Raw for post-quantum (ML-DSA) certificates without a strict
 // profile. X25519 slots reject with "no X.509 profile" and ML-DSA slots
 // without Raw reject with "post-quantum certificate requires --raw".
-func (s *MutationService) CertImport(ctx context.Context, request CertImportRequest) (Response, error) {
+func (s *MutationService) CertImport(ctx context.Context, request CertImportRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -199,6 +199,14 @@ func (s *MutationService) CertImport(ctx context.Context, request CertImportRequ
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	if algorithm, ok := bestEffortSlotAlgorithm(target.Runtime, request.Slot); ok {
@@ -240,7 +248,7 @@ func (s *MutationService) CertImport(ctx context.Context, request CertImportRequ
 	if err := writeCertificate(target.Runtime, request.Slot, certData); err != nil {
 		return Response{}, err
 	}
-	response := Response{
+	response = Response{
 		Command: "cert-import",
 		Target:  target.Summary,
 		Result:  MutationResult{Action: "cert-import", Changed: true, Notes: []string{fmt.Sprintf("installed certificate into slot %s", SlotName(request.Slot))}},
@@ -250,7 +258,7 @@ func (s *MutationService) CertImport(ctx context.Context, request CertImportRequ
 }
 
 // CertDelete deletes a certificate from a slot.
-func (s *MutationService) CertDelete(ctx context.Context, request DeleteRequest) (Response, error) {
+func (s *MutationService) CertDelete(ctx context.Context, request DeleteRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -258,6 +266,14 @@ func (s *MutationService) CertDelete(ctx context.Context, request DeleteRequest)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	slotView, err := describeSlot(target.Runtime, request.Slot)
@@ -289,14 +305,14 @@ func (s *MutationService) CertDelete(ctx context.Context, request DeleteRequest)
 	if err := clearCertificate(target.Runtime, request.Slot); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "cert-delete", Target: target.Summary, Result: MutationResult{Action: "cert-delete", Changed: true}}
+	response = Response{Command: "cert-delete", Target: target.Summary, Result: MutationResult{Action: "cert-delete", Changed: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // KeyGenerate generates a new slot key, including ML-KEM decapsulation keys
 // on YubiKey 6 tokens (firmware 6.0+).
-func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRequest) (Response, error) {
+func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -305,6 +321,14 @@ func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRe
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	algorithmName, err := s.setManagementCredentials(target.Runtime, resolver, request.ManagementKey, 0)
@@ -328,7 +352,7 @@ func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRe
 	if _, err := generateKeyPairWithPolicies(target.Runtime, request.Slot, request.Algorithm, request.PinPolicy, request.TouchPolicy); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "key-generate", Target: target.Summary, Result: MutationResult{Action: "key-generate", Changed: true, Algorithm: request.AlgorithmName}}
+	response = Response{Command: "key-generate", Target: target.Summary, Result: MutationResult{Action: "key-generate", Changed: true, Algorithm: request.AlgorithmName}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
@@ -340,7 +364,7 @@ func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRe
 // or base64) via --in. ML-KEM-512 import stays unsupported (no standard
 // library implementation to derive the stored encapsulation key) and
 // ML-DSA has no import APDU; both gap-reject without sending a command.
-func (s *MutationService) KeyImport(ctx context.Context, request KeyImportRequest) (Response, error) {
+func (s *MutationService) KeyImport(ctx context.Context, request KeyImportRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -371,6 +395,14 @@ func (s *MutationService) KeyImport(ctx context.Context, request KeyImportReques
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	algorithmName, err := s.setManagementCredentials(target.Runtime, resolver, request.ManagementKey, 0)
@@ -394,7 +426,7 @@ func (s *MutationService) KeyImport(ctx context.Context, request KeyImportReques
 	if err := importKeyPair(target.Runtime, request.Slot, request.Algorithm, privateKey, request.PinPolicy, request.TouchPolicy); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "key-import", Target: target.Summary, Result: MutationResult{Action: "key-import", Changed: true, Algorithm: request.AlgorithmName}}
+	response = Response{Command: "key-import", Target: target.Summary, Result: MutationResult{Action: "key-import", Changed: true, Algorithm: request.AlgorithmName}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
@@ -425,8 +457,12 @@ func checkImportKeyMatch(algorithm byte, privateKey crypto.PrivateKey) error {
 			return UsageError(fmt.Sprintf("import key type mismatch: %s requires an RSA private key, got %T", AlgorithmName(algorithm), privateKey), fmt.Sprintf("provide an RSA private key for --alg %s", AlgorithmName(algorithm)))
 		}
 		wantBits := map[byte]int{piv.AlgRSA1024: 1024, piv.AlgRSA2048: 2048, piv.AlgRSA3072: 3072, piv.AlgRSA4096: 4096}[algorithm]
-		if key.N.BitLen() != wantBits {
-			return UsageError(fmt.Sprintf("import key type mismatch: %s requires a %d-bit key, got %d bits", AlgorithmName(algorithm), wantBits, key.N.BitLen()), fmt.Sprintf("provide an RSA-%d private key for --alg %s", wantBits, AlgorithmName(algorithm)))
+		// Generated keys may carry a modulus up to 7 bits short of the
+		// nominal size (leading zero bits); such keys remain valid for
+		// import. Genuinely wrong sizes reject as unsupported (exit 4),
+		// never as usage errors.
+		if bits := key.N.BitLen(); bits > wantBits || bits <= wantBits-8 {
+			return UnsupportedError(fmt.Sprintf("import key size mismatch: %s requires a %d-bit key, got %d bits: not supported by this release", AlgorithmName(algorithm), wantBits, key.N.BitLen()), fmt.Sprintf("provide an RSA-%d private key for --alg %s", wantBits, AlgorithmName(algorithm)))
 		}
 		return nil
 	case piv.AlgEd25519:
@@ -536,7 +572,7 @@ func bestEffortSlotAlgorithm(runtime *adapters.Runtime, slot piv.Slot) (byte, bo
 }
 
 // KeyDelete deletes a slot key.
-func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, managementKey SecretRequest) (Response, error) {
+func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, managementKey SecretRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -545,6 +581,14 @@ func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, 
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	slotView, err := describeSlot(target.Runtime, request.Slot)
@@ -580,7 +624,7 @@ func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, 
 	if err := deleteKeyPair(target.Runtime, request.Slot); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "key-delete", Target: target.Summary, Result: MutationResult{Action: "key-delete", Changed: true}}
+	response = Response{Command: "key-delete", Target: target.Summary, Result: MutationResult{Action: "key-delete", Changed: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
@@ -590,7 +634,7 @@ func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, 
 // hashes the payload and wraps the digest with DigestInfo, while none
 // signs raw with PKCS#1 v1.5 type-1 padding but no DigestInfo (ykman
 // _pad_message semantics).
-func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Response, error) {
+func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -611,6 +655,14 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	metadata, err := adapters.ResolveKeyMetadata(target.Runtime, request.Slot)
@@ -649,7 +701,7 @@ func (s *MutationService) KeySign(ctx context.Context, request SignRequest) (Res
 // carries the variant-sized ciphertext (768/1088/1568 bytes for
 // ML-KEM-512/768/1024) and the response is the 32-byte shared secret (kind
 // "kem-secret"); encapsulation stays host-side.
-func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeRequest) (Response, error) {
+func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -662,6 +714,14 @@ func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeReq
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	publicKey, err := readPublicKey(target.Runtime, request.Slot)
@@ -733,12 +793,20 @@ func (s *MutationService) KeyChallenge(ctx context.Context, request ChallengeReq
 }
 
 // PINVerify verifies the card PIN.
-func (s *MutationService) PINVerify(ctx context.Context, request PINVerifyRequest) (Response, error) {
+func (s *MutationService) PINVerify(ctx context.Context, request PINVerifyRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	pin, err := resolver.ResolveString(request.PIN)
@@ -748,18 +816,26 @@ func (s *MutationService) PINVerify(ctx context.Context, request PINVerifyReques
 	if err := target.Session.Client.VerifyPIN(pin); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "pin-verify", Target: target.Summary, Result: VerificationResult{Subject: "pin", Verified: true}}
+	response = Response{Command: "pin-verify", Target: target.Summary, Result: VerificationResult{Subject: "pin", Verified: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // PINChange changes the current PIN.
-func (s *MutationService) PINChange(ctx context.Context, request PINChangeRequest) (Response, error) {
+func (s *MutationService) PINChange(ctx context.Context, request PINChangeRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	oldPIN, err := resolver.ResolveString(request.OldPIN)
@@ -773,18 +849,26 @@ func (s *MutationService) PINChange(ctx context.Context, request PINChangeReques
 	if err := adaptersadmin.ChangePIN(target.Runtime, oldPIN, newPIN); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "pin-change", Target: target.Summary, Result: MutationResult{Action: "pin-change", Changed: true}}
+	response = Response{Command: "pin-change", Target: target.Summary, Result: MutationResult{Action: "pin-change", Changed: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // PINUnblock resets the PIN using the PUK.
-func (s *MutationService) PINUnblock(ctx context.Context, request PINUnblockRequest) (Response, error) {
+func (s *MutationService) PINUnblock(ctx context.Context, request PINUnblockRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	puk, err := resolver.ResolveString(request.PUK)
@@ -798,18 +882,26 @@ func (s *MutationService) PINUnblock(ctx context.Context, request PINUnblockRequ
 	if err := adaptersadmin.UnblockPIN(target.Runtime, puk, newPIN); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "pin-unblock", Target: target.Summary, Result: MutationResult{Action: "pin-unblock", Changed: true}}
+	response = Response{Command: "pin-unblock", Target: target.Summary, Result: MutationResult{Action: "pin-unblock", Changed: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // PUKChange changes the current PUK.
-func (s *MutationService) PUKChange(ctx context.Context, request PUKChangeRequest) (Response, error) {
+func (s *MutationService) PUKChange(ctx context.Context, request PUKChangeRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	oldPUK, err := resolver.ResolveString(request.OldPUK)
@@ -823,18 +915,26 @@ func (s *MutationService) PUKChange(ctx context.Context, request PUKChangeReques
 	if err := adaptersadmin.ChangePUK(target.Runtime, oldPUK, newPUK); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "puk-change", Target: target.Summary, Result: MutationResult{Action: "puk-change", Changed: true}}
+	response = Response{Command: "puk-change", Target: target.Summary, Result: MutationResult{Action: "puk-change", Changed: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // MGMVerify verifies the supplied management key.
-func (s *MutationService) MGMVerify(ctx context.Context, request MGMVerifyRequest) (Response, error) {
+func (s *MutationService) MGMVerify(ctx context.Context, request MGMVerifyRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	algorithmName, err := s.setManagementCredentials(target.Runtime, resolver, request.Key, request.Algorithm)
@@ -844,13 +944,13 @@ func (s *MutationService) MGMVerify(ctx context.Context, request MGMVerifyReques
 	if err := target.Runtime.AuthenticateManagementKey(); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "mgm-verify", Target: target.Summary, Result: VerificationResult{Subject: "management-key", Verified: true, Algorithm: algorithmName}}
+	response = Response{Command: "mgm-verify", Target: target.Summary, Result: VerificationResult{Subject: "management-key", Verified: true, Algorithm: algorithmName}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // MGMRotate rotates the management key.
-func (s *MutationService) MGMRotate(ctx context.Context, request MGMRotateRequest) (Response, error) {
+func (s *MutationService) MGMRotate(ctx context.Context, request MGMRotateRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	if request.NewAlgorithm == 0 {
 		return Response{}, UsageError("a new management key algorithm is required", "rerun with --new-alg aes128, aes192, aes256, or 3des")
@@ -859,6 +959,14 @@ func (s *MutationService) MGMRotate(ctx context.Context, request MGMRotateReques
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	currentAlgorithmName, err := s.setManagementCredentials(target.Runtime, resolver, request.CurrentKey, request.Algorithm)
@@ -886,18 +994,26 @@ func (s *MutationService) MGMRotate(ctx context.Context, request MGMRotateReques
 	if err := adaptersadmin.ChangeManagementKeyWithTouch(target.Runtime, request.NewAlgorithm, newKey, request.RequireTouch); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "mgm-rotate", Target: target.Summary, Result: MutationResult{Action: "mgm-rotate", Changed: true, Algorithm: request.NewAlgorithmName}}
+	response = Response{Command: "mgm-rotate", Target: target.Summary, Result: MutationResult{Action: "mgm-rotate", Changed: true, Algorithm: request.NewAlgorithmName}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // SetupInit initializes the selected token using application defaults.
-func (s *MutationService) SetupInit(ctx context.Context, request SetupInitRequest) (Response, error) {
+func (s *MutationService) SetupInit(ctx context.Context, request SetupInitRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	requirements, err := describeInitialization(target.Runtime)
@@ -926,7 +1042,7 @@ func (s *MutationService) SetupInit(ctx context.Context, request SetupInitReques
 	if err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "setup-init", Target: target.Summary, Result: MutationResult{Action: "setup-init", Changed: true, Steps: result.Steps, Notes: result.Notes}}
+	response = Response{Command: "setup-init", Target: target.Summary, Result: MutationResult{Action: "setup-init", Changed: true, Steps: result.Steps, Notes: result.Notes}}
 	if len(result.APDULog) > 0 {
 		response.traceLines = result.APDULog
 	} else {
@@ -936,12 +1052,20 @@ func (s *MutationService) SetupInit(ctx context.Context, request SetupInitReques
 }
 
 // SetupReset resets the selected token.
-func (s *MutationService) SetupReset(ctx context.Context, request SetupResetRequest) (Response, error) {
+func (s *MutationService) SetupReset(ctx context.Context, request SetupResetRequest) (response Response, err error) {
 	resolver := s.resolver(request.Global)
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	requirements, err := adaptersadmin.DescribeReset(target.Runtime)
@@ -978,13 +1102,13 @@ func (s *MutationService) SetupReset(ctx context.Context, request SetupResetRequ
 	if err := adaptersadmin.ResetToken(target.Runtime, params); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "setup-reset", Target: target.Summary, Result: MutationResult{Action: "setup-reset", Changed: true}}
+	response = Response{Command: "setup-reset", Target: target.Summary, Result: MutationResult{Action: "setup-reset", Changed: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
 
 // SetupResetSlot resets one slot.
-func (s *MutationService) SetupResetSlot(ctx context.Context, request SetupResetSlotRequest) (Response, error) {
+func (s *MutationService) SetupResetSlot(ctx context.Context, request SetupResetSlotRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
 	}
@@ -993,6 +1117,14 @@ func (s *MutationService) SetupResetSlot(ctx context.Context, request SetupReset
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() { _ = target.Close() }()
 
 	algorithmName, err := s.setManagementCredentials(target.Runtime, resolver, request.ManagementKey, 0)
@@ -1019,7 +1151,7 @@ func (s *MutationService) SetupResetSlot(ctx context.Context, request SetupReset
 	if err := adaptersadmin.ResetSlot(target.Runtime, request.Slot); err != nil {
 		return Response{}, err
 	}
-	response := Response{Command: "setup-reset-slot", Target: target.Summary, Result: MutationResult{Action: "setup-reset-slot", Changed: true}}
+	response = Response{Command: "setup-reset-slot", Target: target.Summary, Result: MutationResult{Action: "setup-reset-slot", Changed: true}}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }
@@ -1042,7 +1174,7 @@ func (s *MutationService) setManagementCredentials(runtime *adapters.Runtime, re
 	return AlgorithmName(algorithm), nil
 }
 
-func (s *MutationService) binaryArtifactResponse(target *ResolvedTarget, command string, kind string, encoding string, out string, data []byte, jsonMode bool) (Response, error) {
+func (s *MutationService) binaryArtifactResponse(target *ResolvedTarget, command string, kind string, encoding string, out string, data []byte, jsonMode bool) (response Response, err error) {
 	encoded, effectiveEncoding, err := EncodeBinary(data, encoding)
 	if err != nil {
 		return Response{}, err
@@ -1065,7 +1197,7 @@ func (s *MutationService) binaryArtifactResponse(target *ResolvedTarget, command
 	} else {
 		result.Data = strings.TrimSpace(string(encoded))
 	}
-	response := Response{Command: command, Target: target.Summary, Result: result, Warnings: warnings}
+	response = Response{Command: command, Target: target.Summary, Result: result, Warnings: warnings}
 	if out == "" {
 		response.rawOutput = encoded
 	}
