@@ -17,11 +17,11 @@ func (c *cli) newCertCommand() *cobra.Command {
 		Short: "Export a slot certificate",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlot(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.info.CertExport(ctx, app.ExportRequest{Global: global, Slot: slot, Format: exportFormat, Out: exportOut})
 			})
 		},
@@ -37,11 +37,11 @@ func (c *cli) newCertCommand() *cobra.Command {
 		Short: "Import a certificate into a slot",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.CertImport(ctx, app.CertImportRequest{Global: global, Slot: slot, Path: args[1], Raw: importRawCert, ManagementKey: secretRequest("management key", "Enter management key: ", importMGMEnv, "PIV_MANAGEMENT_KEY", importMGMStdin)})
 			})
 		},
@@ -59,11 +59,11 @@ func (c *cli) newCertCommand() *cobra.Command {
 		Short: "Delete a slot certificate",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.CertDelete(ctx, app.DeleteRequest{Global: global, Slot: slot, Yes: deleteYes, DryRun: deleteDryRun, ManagementKey: secretRequest("management key", "Enter management key: ", deleteMGMEnv, "PIV_MANAGEMENT_KEY", deleteMGMStdin)})
 			})
 		},
@@ -91,23 +91,23 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Generate a new key in a slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
-			algorithm, algorithmName, err := app.ParseKeyAlgorithm(generateAlgorithm)
-			if err != nil {
-				return err
-			}
-			pinPolicy, err := app.ParsePINPolicy(generatePinPolicy)
-			if err != nil {
-				return err
-			}
-			touchPolicy, err := app.ParseTouchPolicy(generateTouchPolicy)
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
+				algorithm, algorithmName, err := app.ParseKeyAlgorithm(generateAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
+				pinPolicy, err := app.ParsePINPolicy(generatePinPolicy)
+				if err != nil {
+					return app.Response{}, err
+				}
+				touchPolicy, err := app.ParseTouchPolicy(generateTouchPolicy)
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.KeyGenerate(ctx, app.KeyGenerateRequest{
 					Global:        global,
 					Slot:          slot,
@@ -136,11 +136,11 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Export a slot public key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlot(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.info.KeyPublic(ctx, app.ExportRequest{Global: global, Slot: slot, Format: publicFormat, Out: publicOut})
 			})
 		},
@@ -155,11 +155,11 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Attest a slot key and export its attestation certificate",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlot(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.info.Attest(ctx, app.ExportRequest{Global: global, Slot: slot, Format: attestFormat, Out: attestOut})
 			})
 		},
@@ -176,11 +176,11 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Delete a slot key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.KeyDelete(ctx, app.DeleteRequest{Global: global, Slot: slot, Yes: deleteYes, DryRun: deleteDryRun}, secretRequest("management key", "Enter management key: ", deleteMGMEnv, "PIV_MANAGEMENT_KEY", deleteMGMStdin))
 			})
 		},
@@ -201,12 +201,12 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Sign input data with a slot key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
 			usePIN := secretSourceUsed(signPINEnv, "PIV_PIN", signPINStdin)
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.KeySign(ctx, app.SignRequest{
 					Global:    global,
 					Slot:      slot,
@@ -238,12 +238,12 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Run GENERAL AUTHENTICATE with a supplied challenge (X25519 slots perform ECDH, ML-KEM slots decapsulate)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
 			usePIN := secretSourceUsed(challengePINEnv, "PIV_PIN", challengePINStdin)
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.KeyChallenge(ctx, app.ChallengeRequest{
 					Global:       global,
 					Slot:         slot,
@@ -275,23 +275,23 @@ func (c *cli) newKeyCommand() *cobra.Command {
 		Short: "Import a private key into a slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
-			algorithm, algorithmName, err := app.ParseKeyAlgorithm(importAlgorithm)
-			if err != nil {
-				return err
-			}
-			pinPolicy, err := app.ParsePINPolicy(importPinPolicy)
-			if err != nil {
-				return err
-			}
-			touchPolicy, err := app.ParseTouchPolicy(importTouchPolicy)
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
+				algorithm, algorithmName, err := app.ParseKeyAlgorithm(importAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
+				pinPolicy, err := app.ParsePINPolicy(importPinPolicy)
+				if err != nil {
+					return app.Response{}, err
+				}
+				touchPolicy, err := app.ParseTouchPolicy(importTouchPolicy)
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.KeyImport(ctx, app.KeyImportRequest{
 					Global:        global,
 					Slot:          slot,

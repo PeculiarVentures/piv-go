@@ -253,9 +253,7 @@ func newTestCLIWithPath(t *testing.T, configPath string, targets *app.TargetReso
 }
 
 func executeCLI(cli *cli, args ...string) error {
-	root := cli.rootCommand()
-	root.SetArgs(args)
-	err := root.Execute()
+	err := runCLI(cli, args)
 	if err == nil {
 		return nil
 	}

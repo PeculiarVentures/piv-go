@@ -72,12 +72,35 @@ func (c *Client) ImportKey(slot Slot, algorithm byte, privateKey crypto.PrivateK
 	if err != nil {
 		return err
 	}
+	return c.sendImportKey(slot, algorithm, data)
+}
+
+// sendImportKey issues IMPORT KEY (INS 0xFE), splitting payloads above the
+// short-APDU limit into chained commands (CLA 0x10 intermediates, CLA 0x00
+// final), mirroring ykman and PutData. Legacy firmware without extended-APDU
+// support (for example YubiKey NEO) rejects a single extended-length IMPORT
+// KEY with 6700, while RSA-2048 payloads always exceed 255 bytes.
+func (c *Client) sendImportKey(slot Slot, algorithm byte, data []byte) error {
+	if len(data) <= 0xFF {
+		return c.importKeyChunk(0x00, slot, algorithm, data)
+	}
+	const maxChunkSize = 216
+	for len(data) > maxChunkSize {
+		if err := c.importKeyChunk(0x10, slot, algorithm, data[:maxChunkSize]); err != nil {
+			return err
+		}
+		data = data[maxChunkSize:]
+	}
+	return c.importKeyChunk(0x00, slot, algorithm, data)
+}
+
+func (c *Client) importKeyChunk(cla byte, slot Slot, algorithm byte, chunk []byte) error {
 	cmd := &iso7816.Command{
-		Cla:  0x00,
+		Cla:  cla,
 		Ins:  InsImportKey,
 		P1:   algorithm,
 		P2:   byte(slot),
-		Data: data,
+		Data: chunk,
 		Le:   -1,
 	}
 	resp, err := c.sendCommand(cmd)
@@ -175,30 +198,20 @@ func encodeImportKeyData(algorithm byte, privateKey crypto.PrivateKey, pinPolicy
 }
 
 func rsaImportHalfLength(algorithm byte, key *rsa.PrivateKey) (int, error) {
-	switch algorithm {
-	case AlgRSA1024:
-		if key.N.BitLen() != 1024 {
-			return 0, fmt.Errorf("piv: unsupported import: RSA-1024 requires a 1024-bit key, got %d bits", key.N.BitLen())
-		}
-		return 64, nil
-	case AlgRSA2048:
-		if key.N.BitLen() != 2048 {
-			return 0, fmt.Errorf("piv: unsupported import: RSA-2048 requires a 2048-bit key, got %d bits", key.N.BitLen())
-		}
-		return 128, nil
-	case AlgRSA3072:
-		if key.N.BitLen() != 3072 {
-			return 0, fmt.Errorf("piv: unsupported import: RSA-3072 requires a 3072-bit key, got %d bits", key.N.BitLen())
-		}
-		return 192, nil
-	case AlgRSA4096:
-		if key.N.BitLen() != 4096 {
-			return 0, fmt.Errorf("piv: unsupported import: RSA-4096 requires a 4096-bit key, got %d bits", key.N.BitLen())
-		}
-		return 256, nil
-	default:
+	halfLengths := map[byte]int{AlgRSA1024: 64, AlgRSA2048: 128, AlgRSA3072: 192, AlgRSA4096: 256}
+	halfLen, ok := halfLengths[algorithm]
+	if !ok {
 		return 0, fmt.Errorf("piv: unsupported import algorithm 0x%02X", algorithm)
 	}
+	wantBits := halfLen * 16
+	// Generated keys may carry a modulus up to 7 bits short of the nominal
+	// size (leading zero bits); the halves encoding pads each factor to the
+	// fixed half length either way.
+	bits := key.N.BitLen()
+	if bits > wantBits || bits <= wantBits-8 {
+		return 0, fmt.Errorf("piv: unsupported import: RSA-%d requires a %d-bit key, got %d bits: not supported", wantBits, wantBits, bits)
+	}
+	return halfLen, nil
 }
 
 func ecdsaImportScalarLength(algorithm byte, key *ecdsa.PrivateKey) (int, error) {

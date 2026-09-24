@@ -121,6 +121,9 @@ func (c *cli) execute(cmd *cobra.Command, action func(context.Context, app.Globa
 	if err != nil {
 		mapped := c.mapper.Map(err)
 		_ = c.formatter.WriteError(c.stdout, c.stderr, mapped, global.JSON)
+		// Failure-carried trace reaches stderr (or the trace file) only,
+		// never stdout, so piped artifacts stay clean.
+		_ = c.formatter.WriteTrace(c.stderr, app.TraceLinesFromError(err), global)
 		return &app.ExitError{Code: mapped.ExitCode}
 	}
 	if err := c.formatter.WriteResponse(c.stdout, c.stderr, response, global); err != nil {

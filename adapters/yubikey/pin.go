@@ -9,7 +9,8 @@ import (
 )
 
 // PINStatus handles PUK status for YubiKey, where standard VERIFY status for PUK
-// may return 6A88 (referenced data not found). In that case we report status as
+// may return 6A88 (referenced data not found) or, on some firmware such as
+// YubiKey 4 (FW 4.2.8), 6A80 (wrong data). In either case we report status as
 // available but retries unknown.
 func (a *Adapter) PINStatus(session *adapters.Session, pinType piv.PINType) (adapters.PINStatus, error) {
 	if err := requireSessionClient(session); err != nil {
@@ -29,7 +30,7 @@ func (a *Adapter) PINStatus(session *adapters.Session, pinType piv.PINType) (ada
 	session.Observe(adapters.LogLevelDebug, a, "read-pin-status", "falling back to standard PIV PIN status for %v", pinType)
 	status, err := session.Client.PINStatus(pinType)
 	if err != nil && pinType == piv.PINTypePUK {
-		if iso7816.IsStatus(err, iso7816.SwReferencedDataNotFound) {
+		if iso7816.IsStatus(err, iso7816.SwReferencedDataNotFound) || iso7816.IsStatus(err, iso7816.SwWrongData) {
 			session.Observe(adapters.LogLevelInfo, a, "read-pin-status", "PUK metadata unavailable, reporting unknown retry count")
 			return adapters.PINStatus{Type: pinType, RetriesLeft: -1}, nil
 		}

@@ -121,10 +121,16 @@ func TestKeyGenerateRejectsAttestationSlotWithoutAPDU(t *testing.T) {
 			"YubiKey Test": func() piv.Card { return card },
 		},
 	}, nil, bytes.NewReader(nil), &bytes.Buffer{})
-	cli, _, _ := newTestCLI(t, targets, bytes.NewReader(nil))
+	cli, stdout, stderr := newTestCLI(t, targets, bytes.NewReader(nil))
 	err := executeCLI(cli, "key", "generate", "f9", "--alg", "p256", "--reader", "YubiKey Test")
-	if err == nil || !strings.Contains(err.Error(), "read-only") {
-		t.Fatalf("expected read-only F9 rejection, got %v", err)
+	if code := exitCodeOf(t, err); code != 1 {
+		t.Fatalf("exit code = %d, want 1 (err %v)", code, err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout must stay empty on parse error, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "read-only") {
+		t.Fatalf("expected read-only F9 rejection on stderr, got %q", stderr.String())
 	}
 	if len(card.TransmittedCommands) != 0 {
 		t.Fatalf("rejected F9 generate must not send any APDU, got % X", card.TransmittedCommands)
@@ -138,10 +144,16 @@ func TestCertImportRejectsAttestationSlotWithoutAPDU(t *testing.T) {
 			"YubiKey Test": func() piv.Card { return card },
 		},
 	}, nil, bytes.NewReader(nil), &bytes.Buffer{})
-	cli, _, _ := newTestCLI(t, targets, bytes.NewReader(nil))
+	cli, stdout, stderr := newTestCLI(t, targets, bytes.NewReader(nil))
 	err := executeCLI(cli, "cert", "import", "attestation", "/nonexistent-cert.pem", "--reader", "YubiKey Test")
-	if err == nil || !strings.Contains(err.Error(), "read-only") {
-		t.Fatalf("expected read-only F9 rejection, got %v", err)
+	if code := exitCodeOf(t, err); code != 1 {
+		t.Fatalf("exit code = %d, want 1 (err %v)", code, err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout must stay empty on parse error, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "read-only") {
+		t.Fatalf("expected read-only F9 rejection on stderr, got %q", stderr.String())
 	}
 	if len(card.TransmittedCommands) != 0 {
 		t.Fatalf("rejected F9 cert import must not send any APDU, got % X", card.TransmittedCommands)

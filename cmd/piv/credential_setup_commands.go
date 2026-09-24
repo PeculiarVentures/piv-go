@@ -132,11 +132,11 @@ func (c *cli) newManagementCommand() *cobra.Command {
 		Short: "Verify the management key",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			algorithm, algorithmName, err := app.ParseManagementAlgorithm(verifyAlgorithm)
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				algorithm, algorithmName, err := app.ParseManagementAlgorithm(verifyAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.MGMVerify(ctx, app.MGMVerifyRequest{
 					Global:        global,
 					Key:           secretRequest("management key", "Enter management key: ", verifyEnv, "PIV_MANAGEMENT_KEY", verifyStdin),
@@ -164,15 +164,15 @@ func (c *cli) newManagementCommand() *cobra.Command {
 		Short: "Rotate the management key",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			algorithm, algorithmName, err := app.ParseManagementAlgorithm(rotateAlgorithm)
-			if err != nil {
-				return err
-			}
-			newAlgorithm, newAlgorithmName, err := app.ParseManagementAlgorithm(rotateNewAlgorithm)
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				algorithm, algorithmName, err := app.ParseManagementAlgorithm(rotateAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
+				newAlgorithm, newAlgorithmName, err := app.ParseManagementAlgorithm(rotateNewAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.MGMRotate(ctx, app.MGMRotateRequest{
 					Global:           global,
 					CurrentKey:       secretRequest("current management key", "Enter current management key: ", rotateCurrentEnv, "PIV_MANAGEMENT_KEY", rotateCurrentStdin),
@@ -278,11 +278,11 @@ func (c *cli) newSetupCommand() *cobra.Command {
 		Short: "Reset one slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlotForMutation(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.SetupResetSlot(ctx, app.SetupResetSlotRequest{
 					Global:        global,
 					ManagementKey: secretRequest("management key", "Enter management key: ", resetSlotMGMEnv, "PIV_MANAGEMENT_KEY", resetSlotMGMStdin),

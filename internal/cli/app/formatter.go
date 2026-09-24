@@ -364,6 +364,13 @@ func (f *Formatter) mutationSummary(result MutationResult, target TargetSummary)
 	}
 }
 
+// WriteTrace renders failure-carried trace lines to stderr (or the trace
+// file), never to stdout, so artifact bytes stay clean. It is the error-path
+// counterpart of the success trace in WriteResponse.
+func (f *Formatter) WriteTrace(stderr io.Writer, lines []string, options GlobalOptions) error {
+	return f.writeTrace(stderr, lines, options)
+}
+
 func (f *Formatter) writeTrace(stderr io.Writer, lines []string, options GlobalOptions) error {
 	if options.Trace == TraceOff || len(lines) == 0 {
 		return nil

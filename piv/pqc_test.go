@@ -194,13 +194,10 @@ func syntheticRSAKeyForImport(t *testing.T, bits int) *rsa.PrivateKey {
 	return nil
 }
 
-func assertImportCommand(t *testing.T, raw []byte, slot Slot, algorithm byte, tags map[uint]int) {
+func assertImportCommand(t *testing.T, card *emulator.Card, slot Slot, algorithm byte, tags map[uint]int) {
 	t.Helper()
-	cmd := mustParseCommand(t, raw)
-	if cmd.Cla != 0x00 || cmd.Ins != InsImportKey || cmd.P1 != algorithm || cmd.P2 != byte(slot) {
-		t.Fatalf("import header = %02X %02X %02X %02X, want 00 FE %02X %02X", cmd.Cla, cmd.Ins, cmd.P1, cmd.P2, algorithm, byte(slot))
-	}
-	tlvs, err := iso7816.ParseAllTLV(cmd.Data)
+	payload := reassembleChainedImport(t, card, slot, algorithm)
+	tlvs, err := iso7816.ParseAllTLV(payload)
 	if err != nil {
 		t.Fatalf("parse import payload: %v", err)
 	}
@@ -223,7 +220,7 @@ func TestClient_ImportKeyPQC(t *testing.T) {
 		if err := NewClient(mock).ImportKey(SlotKeyManagement, AlgRSA3072, key, PinPolicyDefault, TouchPolicyDefault); err != nil {
 			t.Fatalf("ImportKey() error = %v", err)
 		}
-		assertImportCommand(t, mock.TransmittedCommands[0], SlotKeyManagement, AlgRSA3072,
+		assertImportCommand(t, mock, SlotKeyManagement, AlgRSA3072,
 			map[uint]int{0x01: 192, 0x02: 192, 0x03: 192, 0x04: 192, 0x05: 192})
 	})
 	t.Run("rsa4096 halves 256", func(t *testing.T) {
@@ -233,7 +230,7 @@ func TestClient_ImportKeyPQC(t *testing.T) {
 		if err := NewClient(mock).ImportKey(SlotKeyManagement, AlgRSA4096, key, PinPolicyDefault, TouchPolicyDefault); err != nil {
 			t.Fatalf("ImportKey() error = %v", err)
 		}
-		assertImportCommand(t, mock.TransmittedCommands[0], SlotKeyManagement, AlgRSA4096,
+		assertImportCommand(t, mock, SlotKeyManagement, AlgRSA4096,
 			map[uint]int{0x01: 256, 0x02: 256, 0x03: 256, 0x04: 256, 0x05: 256})
 	})
 	t.Run("ed25519 tag 07", func(t *testing.T) {
@@ -243,7 +240,7 @@ func TestClient_ImportKeyPQC(t *testing.T) {
 		if err := NewClient(mock).ImportKey(SlotSignature, AlgEd25519, &OpaquePrivateKey{Algorithm: AlgEd25519, Raw: seed}, PinPolicyOnce, TouchPolicyDefault); err != nil {
 			t.Fatalf("ImportKey() error = %v", err)
 		}
-		assertImportCommand(t, mock.TransmittedCommands[0], SlotSignature, AlgEd25519, map[uint]int{0x07: 32})
+		assertImportCommand(t, mock, SlotSignature, AlgEd25519, map[uint]int{0x07: 32})
 		cmd := mustParseCommand(t, mock.TransmittedCommands[0])
 		tlvs, _ := iso7816.ParseAllTLV(cmd.Data)
 		if pin := iso7816.FindTag(tlvs, TagPinPolicy); pin == nil || pin.Value[0] != PinPolicyOnce {
@@ -257,7 +254,7 @@ func TestClient_ImportKeyPQC(t *testing.T) {
 		if err := NewClient(mock).ImportKey(SlotKeyManagement, AlgX25519, seed, PinPolicyDefault, TouchPolicyDefault); err != nil {
 			t.Fatalf("ImportKey() error = %v", err)
 		}
-		assertImportCommand(t, mock.TransmittedCommands[0], SlotKeyManagement, AlgX25519, map[uint]int{0x08: 32})
+		assertImportCommand(t, mock, SlotKeyManagement, AlgX25519, map[uint]int{0x08: 32})
 	})
 	t.Run("mlkem768 tag 0A seed 64", func(t *testing.T) {
 		seed := bytes.Repeat([]byte{0xD5}, MLKEMSeedLength)
@@ -266,7 +263,7 @@ func TestClient_ImportKeyPQC(t *testing.T) {
 		if err := NewClient(mock).ImportKey(SlotKeyManagement, AlgMLKEM768, &OpaquePrivateKey{Algorithm: AlgMLKEM768, Raw: seed}, PinPolicyDefault, TouchPolicyDefault); err != nil {
 			t.Fatalf("ImportKey() error = %v", err)
 		}
-		assertImportCommand(t, mock.TransmittedCommands[0], SlotKeyManagement, AlgMLKEM768, map[uint]int{0x0A: MLKEMSeedLength})
+		assertImportCommand(t, mock, SlotKeyManagement, AlgMLKEM768, map[uint]int{0x0A: MLKEMSeedLength})
 		cmd := mustParseCommand(t, mock.TransmittedCommands[0])
 		if cmd.Cla != 0x00 || cmd.Ins != InsImportKey || cmd.P1 != AlgMLKEM768 {
 			t.Fatalf("import header = %02X %02X %02X, want 00 FE E6", cmd.Cla, cmd.Ins, cmd.P1)
@@ -284,7 +281,7 @@ func TestClient_ImportKeyPQC(t *testing.T) {
 			if err := NewClient(mock).ImportKey(SlotSignature, algorithm, bytes.Repeat([]byte{0xD5}, MLKEMSeedLength), PinPolicyDefault, TouchPolicyDefault); err != nil {
 				t.Fatalf("ImportKey(0x%02X) error = %v", algorithm, err)
 			}
-			assertImportCommand(t, mock.TransmittedCommands[0], SlotSignature, algorithm, map[uint]int{0x0A: MLKEMSeedLength})
+			assertImportCommand(t, mock, SlotSignature, algorithm, map[uint]int{0x0A: MLKEMSeedLength})
 		}
 	})
 	t.Run("mlkem rejects mismatch and bad length without APDU", func(t *testing.T) {

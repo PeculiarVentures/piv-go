@@ -163,14 +163,8 @@ func TestClient_ImportKey_RSA2048(t *testing.T) {
 	if err := NewClient(mock).ImportKey(SlotKeyManagement, AlgRSA2048, privateKey, PinPolicyDefault, TouchPolicyDefault); err != nil {
 		t.Fatalf("ImportKey() error = %v", err)
 	}
-	command, err := iso7816.ParseCommand(mock.TransmittedCommands[0])
-	if err != nil {
-		t.Fatalf("parse command: %v", err)
-	}
-	if command.Ins != 0xFE || command.P1 != AlgRSA2048 || command.P2 != byte(SlotKeyManagement) {
-		t.Fatalf("unexpected header: %X", mock.TransmittedCommands[0][:4])
-	}
-	tlvs, err := iso7816.ParseAllTLV(command.Data)
+	payload := reassembleChainedImport(t, mock, SlotKeyManagement, AlgRSA2048)
+	tlvs, err := iso7816.ParseAllTLV(payload)
 	if err != nil {
 		t.Fatalf("parse payload: %v", err)
 	}
@@ -183,6 +177,47 @@ func TestClient_ImportKey_RSA2048(t *testing.T) {
 			t.Fatalf("tag 0x%02X: expected 128 bytes, got %d", tag, len(field.Value))
 		}
 	}
+}
+
+// reassembleChainedImport concatenates the IMPORT KEY payload across chained
+// short APDUs (CLA 0x10 intermediates, CLA 0x00 final). Payloads above 255
+// bytes must never use extended-length encoding: legacy firmware (NEO)
+// rejects it with 6700.
+func reassembleChainedImport(t *testing.T, mock *emulator.Card, slot Slot, algorithm byte) []byte {
+	t.Helper()
+	var payload []byte
+	chained := 0
+	for _, raw := range mock.TransmittedCommands {
+		if len(raw) < 2 || raw[1] != InsImportKey {
+			continue
+		}
+		if len(raw) >= 5 && raw[4] == 0x00 {
+			t.Fatalf("IMPORT KEY must use short APDUs, got extended-length header: %X", raw[:7])
+		}
+		command, err := iso7816.ParseCommand(raw)
+		if err != nil {
+			t.Fatalf("parse command: %v", err)
+		}
+		if command.P1 != algorithm || command.P2 != byte(slot) {
+			t.Fatalf("unexpected header: %X", raw[:4])
+		}
+		if len(command.Data) == 0 {
+			t.Fatalf("empty IMPORT KEY chunk in %X", raw)
+		}
+		if command.Cla == 0x10 {
+			chained++
+		} else if command.Cla != 0x00 {
+			t.Fatalf("unexpected CLA %02X in %X", command.Cla, raw[:4])
+		}
+		payload = append(payload, command.Data...)
+	}
+	if len(payload) == 0 {
+		t.Fatal("expected IMPORT KEY commands")
+	}
+	if len(payload) > 0xFF && chained == 0 {
+		t.Fatal("payloads above 255 bytes must use command chaining")
+	}
+	return payload
 }
 
 func TestClient_ImportKey_Rejects(t *testing.T) {

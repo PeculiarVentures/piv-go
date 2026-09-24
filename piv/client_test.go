@@ -218,3 +218,79 @@ func TestMockCard_Close(t *testing.T) {
 		t.Error("expected Closed=true")
 	}
 }
+
+func TestClient_SignRSA2048ChainsOversizedChallenge(t *testing.T) {
+	// A host-padded 256-byte RSA challenge exceeds the short-APDU limit:
+	// it must go out as chained short APDUs (CLA 0x10 intermediates),
+	// never as one extended-length AUTHENTICATE that legacy firmware
+	// rejects with 6700. The challenge padding itself is untouched.
+	message := make([]byte, 256)
+	for i := range message {
+		message[i] = byte(i)
+	}
+	sig := make([]byte, 256)
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, sig)))
+	got, err := NewClient(mock).Sign(AlgRSA2048, SlotSignature, message, RSASignHashNone)
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	if len(got) != len(sig) {
+		t.Fatalf("signature length = %d, want %d", len(got), len(sig))
+	}
+	var payload []byte
+	for index, raw := range mock.TransmittedCommands {
+		if len(raw) < 2 || raw[1] != 0x87 {
+			t.Fatalf("unexpected INS in %X", raw)
+		}
+		if len(raw) >= 5 && raw[4] == 0x00 {
+			t.Fatalf("AUTHENTICATE must use short APDUs, got extended-length header: %X", raw[:7])
+		}
+		command, err := iso7816.ParseCommand(raw)
+		if err != nil {
+			t.Fatalf("parse command %d: %v", index, err)
+		}
+		if index < len(mock.TransmittedCommands)-1 && command.Cla != 0x10 {
+			t.Fatalf("intermediate chunk %d must use CLA 0x10, got %02X", index, command.Cla)
+		}
+		payload = append(payload, command.Data...)
+	}
+	if len(mock.TransmittedCommands) < 2 {
+		t.Fatalf("expected chained AUTHENTICATE, got %d commands", len(mock.TransmittedCommands))
+	}
+	outer, err := iso7816.ParseAllTLV(payload)
+	if err != nil {
+		t.Fatalf("parse outer: %v", err)
+	}
+	auth := iso7816.FindTag(outer, 0x7C)
+	if auth == nil {
+		t.Fatalf("0x7C not found in %X", payload)
+	}
+	inner, err := iso7816.ParseAllTLV(auth.Value)
+	if err != nil {
+		t.Fatalf("parse inner: %v", err)
+	}
+	challenge := iso7816.FindTag(inner, 0x81)
+	if challenge == nil || string(challenge.Value) != string(message) {
+		t.Fatal("0x81 challenge must carry the message verbatim")
+	}
+}
+
+func TestClient_SignSmallChallengeStaysSingleAPDU(t *testing.T) {
+	message := []byte{0x01, 0x02, 0x03}
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, []byte{0xAA})))
+	if _, err := NewClient(mock).Sign(AlgRSA2048, SlotSignature, message, RSASignHashNone); err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	if len(mock.TransmittedCommands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(mock.TransmittedCommands))
+	}
+	command, err := iso7816.ParseCommand(mock.TransmittedCommands[0])
+	if err != nil {
+		t.Fatalf("parse command: %v", err)
+	}
+	if command.Cla != 0x00 || command.Ins != 0x87 {
+		t.Fatalf("unexpected header: %X", mock.TransmittedCommands[0][:4])
+	}
+}
