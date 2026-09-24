@@ -158,6 +158,21 @@ func TestCobraUnknownFlagJSONPositionDoesNotMatter(t *testing.T) {
 	}
 }
 
+func TestCobraJSONFalseAfterJSONDisablesEnvelope(t *testing.T) {
+	args := []string{"key", "generate", "9a", "--json", "--json=false"}
+	cli, stdout, stderr := newTestCLI(t, nil, bytes.NewReader(nil))
+	err := executeCLI(cli, args...)
+	if code := exitCodeOf(t, err); code != 1 {
+		t.Fatalf("args %v: exit code = %d, want 1 (err %v)", args, code, err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("args %v: expected text error on stderr, got stdout %q", args, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "required flag") {
+		t.Fatalf("args %v: expected missing-flag message, got stderr %q", args, stderr.String())
+	}
+}
+
 func decodeErrorEnvelope(t *testing.T, stdout *bytes.Buffer, stderr *bytes.Buffer) struct {
 	Error *app.CLIError `json:"error"`
 } {

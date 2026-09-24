@@ -65,20 +65,26 @@ func runCLI(cli *cli, args []string) error {
 // wantsJSON reports whether error output must use the JSON envelope. The
 // parsed persistent flag covers errors after flag parsing (bad args,
 // missing required flags); scanning the raw args additionally covers flag
-// parse failures where --json stands after the offending flag.
+// parse failures where --json stands after the offending flag. When the
+// flag occurs multiple times the last value wins, mirroring Cobra.
 func wantsJSON(cli *cli, args []string) bool {
 	if cli.jsonOutput {
 		return true
 	}
+	found := false
+	value := false
 	for _, arg := range args {
 		if arg == "--json" {
-			return true
+			found = true
+			value = true
+			continue
 		}
-		if value, ok := strings.CutPrefix(arg, "--json="); ok {
-			if parsed, parseErr := strconv.ParseBool(value); parseErr == nil && parsed {
-				return true
+		if flagValue, ok := strings.CutPrefix(arg, "--json="); ok {
+			if parsed, parseErr := strconv.ParseBool(flagValue); parseErr == nil {
+				found = true
+				value = parsed
 			}
 		}
 	}
-	return false
+	return found && value
 }
