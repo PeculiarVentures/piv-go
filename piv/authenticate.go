@@ -9,7 +9,10 @@ import (
 // Authenticate performs a GENERAL AUTHENTICATE operation with the specified
 // algorithm and slot using the provided challenge data. X25519 cannot
 // authenticate and rejects with "x25519 cannot sign: use ECDH"; ML-KEM
-// gap-rejects without sending an APDU.
+// gap-rejects without sending an APDU. RSA-1024/2048 challenges that exceed
+// the short-APDU limit go out as chained short APDUs (CLA 0x10), exactly
+// like Sign, so legacy firmware without extended-APDU support answers
+// instead of rejecting with 6700; the challenge padding itself is untouched.
 func (c *Client) Authenticate(algorithm byte, slot Slot, challenge []byte) ([]byte, error) {
 	if algorithm == AlgX25519 {
 		return nil, x25519SignError(fmt.Sprintf("slot %s", slot))
@@ -30,7 +33,15 @@ func (c *Client) Authenticate(algorithm byte, slot Slot, challenge []byte) ([]by
 		Le:   256,
 	}
 
-	resp, err := c.sendCommand(cmd)
+	var (
+		resp *iso7816.Response
+		err  error
+	)
+	if algorithm == AlgRSA1024 || algorithm == AlgRSA2048 {
+		resp, err = c.sendAuthenticate(cmd)
+	} else {
+		resp, err = c.sendCommand(cmd)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("piv: authenticate: %w", err)
 	}
