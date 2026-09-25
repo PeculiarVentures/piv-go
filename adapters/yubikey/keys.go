@@ -19,6 +19,10 @@ import (
 // token. Callers can use errors.Is to detect it regardless of version text.
 var ErrKeyDeletionUnsupported = errors.New("key deletion is not supported on this firmware, requires 5.7.0 or later")
 
+// ErrP384Unsupported reports that OTP status identifies a YubiKey NEO,
+// which cannot generate or import P-384 keys.
+var ErrP384Unsupported = errors.New("P-384 is not supported on YubiKey NEO")
+
 // YubiKey key management instructions and policy extension tags.
 const (
 	// InsImportKey imports a private key into a PIV slot (INS 0xFE).
@@ -37,6 +41,9 @@ const (
 func (a *Adapter) GenerateKey(session *adapters.Session, slot piv.Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error) {
 	if err := requireSessionClient(session); err != nil {
 		return nil, err
+	}
+	if err := a.preflightP384(session, algorithm); err != nil {
+		return nil, fmt.Errorf("generate YubiKey key in slot %s: %w", slot, err)
 	}
 	session.Observe(adapters.LogLevelInfo, a, "generate-key", "starting YubiKey key generation for %s", slot)
 	if err := session.AuthenticateManagementKey(a); err != nil {
@@ -74,6 +81,9 @@ func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm 
 		// standard library has no ML-KEM-512 implementation.
 		return fmt.Errorf("import YubiKey key into slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
 	}
+	if err := a.preflightP384(session, algorithm); err != nil {
+		return fmt.Errorf("import YubiKey key into slot %s: %w", slot, err)
+	}
 	session.Observe(adapters.LogLevelInfo, a, "import-key", "starting YubiKey key import for %s", slot)
 	if err := session.AuthenticateManagementKey(a); err != nil {
 		return fmt.Errorf("authenticate management key: %w", err)
@@ -91,6 +101,23 @@ func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm 
 		return fmt.Errorf("store imported YubiKey public key for slot %s: %w", slot, err)
 	}
 	session.Observe(adapters.LogLevelInfo, a, "import-key", "completed YubiKey key import for %s", slot)
+	return nil
+}
+
+func (a *Adapter) preflightP384(session *adapters.Session, algorithm byte) error {
+	if algorithm != piv.AlgECCP384 {
+		return nil
+	}
+	supported, version, err := a.p384Support(session)
+	if errors.Is(err, ErrPIVRestore) {
+		return err
+	}
+	if err != nil { // OTP status unavailable: let the card decide.
+		return nil
+	}
+	if !supported {
+		return fmt.Errorf("%w (OTP status %s)", ErrP384Unsupported, version)
+	}
 	return nil
 }
 

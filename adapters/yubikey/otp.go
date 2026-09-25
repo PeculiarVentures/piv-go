@@ -47,7 +47,7 @@ func (a *Adapter) OTPStatusVersion(session *adapters.Session) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(data) != 6 || data[0] == 0 {
+	if len(data) != 6 || data[0]|data[1]|data[2] == 0 {
 		return "", &OTPAppletError{Step: "parse status", Err: fmt.Errorf("invalid version data (%d bytes)", len(data))}
 	}
 	return fmt.Sprintf("%d.%d.%d", data[0], data[1], data[2]), nil
@@ -68,7 +68,38 @@ func supportsDeleteKeyVersion(version string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if parts[0] == 0 {
+		return false, fmt.Errorf("yubikey: preview OTP status %s cannot establish MOVE KEY support", version)
+	}
 	return parts[0] > 5 || parts[0] == 5 && (parts[1] > 7 || parts[1] == 7), nil
+}
+
+// SupportsP384 reports whether OTP status identifies a generation with P-384
+// support. NEO (3.x) does not support P-384. Preview versions (0.x) are left
+// available for a command-level probe; other versions 4.x and later support it.
+// An unavailable OTP status returns an error, so callers can fall back to the
+// card command instead of inferring lack of support.
+func (a *Adapter) SupportsP384(session *adapters.Session) (bool, error) {
+	supported, _, err := a.p384Support(session)
+	return supported, err
+}
+
+func (a *Adapter) p384Support(session *adapters.Session) (bool, string, error) {
+	version, err := a.OTPStatusVersion(session)
+	if err != nil {
+		return false, "", err
+	}
+	parts, err := parseFirmwareVersion(version)
+	if err != nil {
+		return false, version, err
+	}
+	if parts[0] == 3 {
+		return false, version, nil
+	}
+	if parts[0] == 0 || parts[0] >= 4 {
+		return true, version, nil
+	}
+	return false, version, fmt.Errorf("yubikey: OTP status %s does not establish P-384 support", version)
 }
 
 // executeOTP selects OTP, sends one command and always attempts to restore

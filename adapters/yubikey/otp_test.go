@@ -2,6 +2,9 @@ package yubikey
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"testing"
 
@@ -31,6 +34,114 @@ func assertOTPSelectAndPIVRestore(t *testing.T, card *emulator.Card) {
 	}
 	if !bytes.Equal(otp.Data, otpAID) || bytes.Equal(pivSelect.Data, otpAID) {
 		t.Fatalf("wrong SELECT order: OTP %X, PIV %X", otp.Data, pivSelect.Data)
+	}
+}
+
+func TestP384NEORejectsBeforeManagementAndMutation(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		call func(*Adapter, *emulator.Card) error
+	}{
+		{"generate", func(adapter *Adapter, card *emulator.Card) error {
+			_, err := adapter.GenerateKey(newYubiKeyPolicySession(card), piv.SlotSignature, piv.AlgECCP384, 0, 0)
+			return err
+		}},
+		{"import", func(adapter *Adapter, card *emulator.Card) error {
+			return adapter.ImportKey(newYubiKeyPolicySession(card), piv.SlotSignature, piv.AlgECCP384, key, 0, 0)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			card := emulator.NewCard()
+			card.SetSuccessResponse(0xA4, nil)
+			card.SetSuccessResponse(0x03, []byte{3, 4, 1, 0, 0, 0})
+			err := tc.call(NewAdapter(), card)
+			if !errors.Is(err, ErrP384Unsupported) {
+				t.Fatalf("expected typed NEO P-384 refusal, got %v", err)
+			}
+			assertOTPSelectAndPIVRestore(t, card)
+			for _, raw := range card.TransmittedCommands {
+				if len(raw) < 2 || raw[1] != 0xA4 && raw[1] != 0x03 {
+					t.Fatalf("preflight sent authentication or mutation APDU: %X", raw)
+				}
+			}
+		})
+	}
+}
+
+func TestSupportsP384VersionClasses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"NEO", []byte{3, 4, 1, 0, 0, 0}, false},
+		{"preview", []byte{0, 0, 1, 0, 0, 0}, true},
+		{"YubiKey4", []byte{4, 2, 8, 0, 0, 0}, true},
+		{"YubiKey5", []byte{5, 7, 0, 0, 0, 0}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			card := emulator.NewCard()
+			card.SetSuccessResponse(0xA4, nil)
+			card.SetSuccessResponse(0x03, tc.data)
+			got, err := NewAdapter().SupportsP384(newYubiKeyPolicySession(card))
+			if err != nil || got != tc.want {
+				t.Fatalf("P-384 support = %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSupportsP384UnknownOldGenerationIsIndeterminate(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetSuccessResponse(0x03, []byte{2, 1, 0, 0, 0, 0})
+	_, err := NewAdapter().SupportsP384(newYubiKeyPolicySession(card))
+	if err == nil {
+		t.Fatal("unknown old generation must not be labelled NEO")
+	}
+}
+
+func TestP384FallsBackToCardWhenOTPStatusUnavailable(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetResponse(0x03, nil, uint16(iso7816.SwInsNotSupported))
+	enqueueManagementAuth(card)
+	card.SetResponse(0x47, nil, uint16(iso7816.SwWrongData))
+	_, err := NewAdapter().GenerateKey(newYubiKeyPolicySession(card), piv.SlotSignature, piv.AlgECCP384, 0, 0)
+	if !iso7816.IsStatus(err, iso7816.SwWrongData) || findCommand(card, 0x47) == nil {
+		t.Fatalf("unavailable OTP status must let GENERATE decide, got %v", err)
+	}
+}
+
+func TestP384PreviewContinuesToCard(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetSuccessResponse(0x03, []byte{0, 0, 1, 0, 0, 0})
+	enqueueManagementAuth(card)
+	card.SetResponse(0x47, nil, uint16(iso7816.SwWrongData))
+	_, err := NewAdapter().GenerateKey(newYubiKeyPolicySession(card), piv.SlotSignature, piv.AlgECCP384, 0, 0)
+	if !iso7816.IsStatus(err, iso7816.SwWrongData) || findCommand(card, 0x47) == nil {
+		t.Fatalf("preview status must let GENERATE decide, got %v", err)
+	}
+}
+
+func TestP384StopsOnPIVRestoreFailure(t *testing.T) {
+	card := emulator.NewCard()
+	card.EnqueueResponse(0xA4, nil, uint16(iso7816.SwSuccess))
+	card.EnqueueResponse(0xA4, nil, uint16(iso7816.SwFileNotFound))
+	card.SetSuccessResponse(0x03, []byte{5, 7, 0, 0, 0, 0})
+	_, err := NewAdapter().GenerateKey(newYubiKeyPolicySession(card), piv.SlotSignature, piv.AlgECCP384, 0, 0)
+	if !errors.Is(err, ErrPIVRestore) {
+		t.Fatalf("expected PIV restore error, got %v", err)
+	}
+	for _, raw := range card.TransmittedCommands {
+		if len(raw) > 1 && (raw[1] == 0x87 || raw[1] == 0x47) {
+			t.Fatalf("must not authenticate or mutate with unknown applet: %X", raw)
+		}
 	}
 }
 
