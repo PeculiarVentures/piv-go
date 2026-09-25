@@ -507,17 +507,17 @@ func TestClient_SignExtendedRSAGoVerification(t *testing.T) {
 	if err := rsa.VerifyPKCS1v15(&priv.PublicKey, crypto.SHA256, sum[:], sig); err != nil {
 		t.Fatalf("VerifyPKCS1v15: %v", err)
 	}
-	em, err := formatExtendedRSAChallenge(AlgRSA3072, sum[:], RSASignHashSHA256)
+	em, err := formatRSAChallenge(AlgRSA3072, sum[:], RSASignHashSHA256)
 	if err != nil {
-		t.Fatalf("formatExtendedRSAChallenge(sha256): %v", err)
+		t.Fatalf("formatRSAChallenge(sha256): %v", err)
 	}
 	wantSuffix := append(append([]byte(nil), sha256DigestInfoPrefix...), sum[:]...)
 	assertPKCS1v15Block(t, em, 384, wantSuffix)
 
 	rawMsg := []byte{0x01, 0x02, 0x03}
-	emRaw, err := formatExtendedRSAChallenge(AlgRSA3072, rawMsg, RSASignHashNone)
+	emRaw, err := formatRSAChallenge(AlgRSA3072, rawMsg, RSASignHashNone)
 	if err != nil {
-		t.Fatalf("formatExtendedRSAChallenge(none): %v", err)
+		t.Fatalf("formatRSAChallenge(none): %v", err)
 	}
 	assertPKCS1v15Block(t, emRaw, 384, rawMsg)
 	if bytes.Contains(emRaw, sha256DigestInfoPrefix) {

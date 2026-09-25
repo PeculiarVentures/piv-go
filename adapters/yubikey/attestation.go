@@ -1,6 +1,7 @@
 package yubikey
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -36,9 +37,10 @@ const attestationMinVersion = "4.3.0"
 // AttestKey returns the raw DER attestation certificate for the key in the
 // specified slot.
 //
-// Only the user key slots 9A/9C/9D/9E can be attested and the token firmware
-// must be 4.3.0 or later. The returned bytes are the raw DER-encoded X.509
-// certificate without verification, mirroring yubikit's attest_key transport
+// Only the user key slots 9A/9C/9D/9E can be attested and the token must
+// support attestation (YubiKey firmware 4.3.0 or later). The returned bytes
+// are the raw DER-encoded X.509 certificate without verification, mirroring
+// yubikit's attest_key transport
 // (00 F9 <slot> 00) while leaving chain validation to the caller.
 func (a *Adapter) AttestKey(session *adapters.Session, slot piv.Slot) ([]byte, error) {
 	if err := requireSessionClient(session); err != nil {
@@ -48,19 +50,34 @@ func (a *Adapter) AttestKey(session *adapters.Session, slot piv.Slot) ([]byte, e
 		return nil, fmt.Errorf("yubikey: attestation is not supported for slot %s", slot)
 	}
 	session.Observe(adapters.LogLevelInfo, a, "attest-key", "starting YubiKey key attestation for %s", slot)
-	version, err := readVersion(session.Client)
+	version, err := a.PIVVersion(session)
 	if err != nil {
-		return nil, fmt.Errorf("yubikey: read firmware version for attestation: %w", err)
+		return nil, fmt.Errorf("yubikey: read PIV applet version for attestation: %w", err)
 	}
 	if isPreviewPlaceholderVersion(version) {
-		session.Observe(adapters.LogLevelWarn, a, "attest-key", "preview firmware version %s skips the %s attestation gate and proceeds to ATTEST KEY", version, attestationMinVersion)
+		session.Observe(adapters.LogLevelWarn, a, "attest-key", "preview PIV applet version %s skips the %s attestation gate and proceeds to ATTEST KEY", version, attestationMinVersion)
 	} else {
 		supported, err := attestationVersionSupported(version)
 		if err != nil {
-			return nil, fmt.Errorf("yubikey: parse firmware version %q for attestation: %w", version, err)
+			return nil, fmt.Errorf("yubikey: parse PIV applet version %q for attestation: %w", version, err)
 		}
 		if !supported {
-			return nil, fmt.Errorf("yubikey: firmware %s is not supported for key attestation, requires %s or later", version, attestationMinVersion)
+			// PIV GET VERSION is not device firmware on NEO. Check OTP
+			// status before rejecting; if unavailable, let ATTEST KEY be
+			// authoritative instead of denying based on the applet version.
+			otpVersion, otpErr := a.OTPStatusVersion(session)
+			if errors.Is(otpErr, ErrPIVRestore) {
+				return nil, fmt.Errorf("yubikey: restore PIV after OTP attestation check: %w", otpErr)
+			}
+			if otpErr == nil {
+				supported, err = attestationVersionSupported(otpVersion)
+				if err != nil {
+					return nil, fmt.Errorf("yubikey: parse OTP status version %q for attestation: %w", otpVersion, err)
+				}
+				if !supported {
+					return nil, fmt.Errorf("yubikey: OTP status %s is not supported for key attestation, requires %s or later", otpVersion, attestationMinVersion)
+				}
+			}
 		}
 	}
 	session.Observe(adapters.LogLevelDebug, a, "attest-key", "issuing YubiKey ATTEST KEY for %s", slot)
@@ -73,10 +90,10 @@ func (a *Adapter) AttestKey(session *adapters.Session, slot piv.Slot) ([]byte, e
 	}
 	resp, err := session.Client.Execute(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("attest YubiKey key in slot %s (firmware %s): %w", slot, version, err)
+		return nil, fmt.Errorf("attest YubiKey key in slot %s (PIV applet version %s): %w", slot, version, err)
 	}
 	if err := resp.Err(); err != nil {
-		return nil, fmt.Errorf("attest YubiKey key in slot %s (firmware %s): %w", slot, version, err)
+		return nil, fmt.Errorf("attest YubiKey key in slot %s (PIV applet version %s): %w", slot, version, err)
 	}
 	if len(resp.Data) == 0 {
 		return nil, fmt.Errorf("attest YubiKey key in slot %s: empty attestation response", slot)

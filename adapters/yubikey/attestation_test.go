@@ -110,6 +110,10 @@ func TestYubiKeyAdapterAttestKeyRequiresFirmware430(t *testing.T) {
 	for _, test := range tests {
 		mock := emulator.NewCard()
 		mock.SetSuccessResponse(0xFD, test.version)
+		if test.wantErr {
+			mock.SetSuccessResponse(0xA4, nil)
+			mock.SetSuccessResponse(0x03, append(append([]byte(nil), test.version...), 0, 0, 0))
+		}
 		mock.SetSuccessResponse(0xF9, der)
 
 		_, err := NewAdapter().AttestKey(newAttestationSession(mock), piv.SlotSignature)
@@ -132,6 +136,20 @@ func TestYubiKeyAdapterAttestKeyRequiresFirmware430(t *testing.T) {
 			t.Fatalf("version %v unexpected error: %v", test.version, err)
 		}
 	}
+}
+
+func TestYubiKeyAdapterAttestKeyDoesNotGateOnOldPIVAppletVersion(t *testing.T) {
+	der := testAttestationDER(t)
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xFD, []byte{1, 0, 4})
+	mock.SetSuccessResponse(0xA4, nil)
+	mock.SetSuccessResponse(0x03, []byte{5, 7, 0, 0, 0, 0})
+	mock.SetSuccessResponse(0xF9, der)
+	got, err := NewAdapter().AttestKey(newAttestationSession(mock), piv.SlotSignature)
+	if err != nil || !bytes.Equal(got, der) {
+		t.Fatalf("old PIV applet with newer OTP status should attempt attestation, got %v", err)
+	}
+	assertOTPSelectAndPIVRestore(t, mock)
 }
 
 func TestYubiKeyAdapterAttestationCertificateMatchesTrace(t *testing.T) {

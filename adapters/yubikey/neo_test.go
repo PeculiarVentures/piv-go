@@ -168,6 +168,7 @@ func TestNEOReadPublicKeyBothAbsentKeepsNotFound(t *testing.T) {
 func TestNEODeleteKeyReportsExactUnsupportedString(t *testing.T) {
 	newCard := func() *emulator.Card {
 		mock := emulator.NewCard()
+		mock.SetSuccessResponse(0xA4, nil)
 		enqueueManagementAuth(mock)
 		mock.SetResponse(0xF6, nil, uint16(iso7816.SwInsNotSupported))
 		return mock
@@ -179,7 +180,7 @@ func TestNEODeleteKeyReportsExactUnsupportedString(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected unsupported error")
 		}
-		want := "delete YubiKey key from slot 9C: key deletion is not supported on firmware 3.4.9, requires 5.7.0 or later"
+		want := "delete YubiKey key from slot 9C (PIV applet version 3.4.9): key deletion is not supported on this firmware, requires 5.7.0 or later"
 		if err.Error() != want {
 			t.Fatalf("error = %q, want %q", err.Error(), want)
 		}

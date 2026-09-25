@@ -35,17 +35,21 @@ func (a *Adapter) ManagementKeyAlgorithm(session *adapters.Session, key []byte) 
 	}
 }
 
-// Version returns the YubiKey firmware version string (for example "5.7.0").
+// Version returns the version reported by PIV GET VERSION (INS 0xFD).
 //
-// The value is returned raw, exactly as reported by the token: preview
-// placeholders with major version 0 (for example "0.0.1") must not be gated
-// by callers. Attestation treats them as preview firmware and proceeds to
-// INS 0xF9 with a warning instead of enforcing the 4.3.0 minimum.
+// On YubiKey NEO this can be the PIV applet version (for example 1.0.4),
+// distinct from device firmware and OTP status. Use OTPStatusVersion for a
+// capability hint and avoid presenting this value as device firmware.
 func (a *Adapter) Version(session *adapters.Session) (string, error) {
+	return a.PIVVersion(session)
+}
+
+// PIVVersion explicitly names the source of the version returned by Version.
+func (a *Adapter) PIVVersion(session *adapters.Session) (string, error) {
 	if err := requireSessionClient(session); err != nil {
 		return "", err
 	}
-	session.Observe(adapters.LogLevelDebug, a, "read-version", "reading YubiKey firmware version")
+	session.Observe(adapters.LogLevelDebug, a, "read-version", "reading YubiKey PIV GET VERSION")
 	return readVersion(session.Client)
 }
 

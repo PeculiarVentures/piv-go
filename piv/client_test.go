@@ -276,21 +276,21 @@ func TestClient_SignRSA2048ChainsOversizedChallenge(t *testing.T) {
 	}
 }
 
-func TestClient_SignSmallChallengeStaysSingleAPDU(t *testing.T) {
+func TestClient_SignSmallRSAChallengeIsPaddedAndChained(t *testing.T) {
 	message := []byte{0x01, 0x02, 0x03}
 	mock := emulator.NewCard()
 	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, []byte{0xAA})))
 	if _, err := NewClient(mock).Sign(AlgRSA2048, SlotSignature, message, RSASignHashNone); err != nil {
 		t.Fatalf("Sign() error = %v", err)
 	}
-	if len(mock.TransmittedCommands) != 1 {
-		t.Fatalf("expected 1 command, got %d", len(mock.TransmittedCommands))
+	if len(mock.TransmittedCommands) != 2 {
+		t.Fatalf("padded RSA-2048 challenge needs 2 short APDUs, got %d", len(mock.TransmittedCommands))
 	}
 	command, err := iso7816.ParseCommand(mock.TransmittedCommands[0])
 	if err != nil {
 		t.Fatalf("parse command: %v", err)
 	}
-	if command.Cla != 0x00 || command.Ins != 0x87 {
+	if command.Cla != 0x10 || command.Ins != 0x87 {
 		t.Fatalf("unexpected header: %X", mock.TransmittedCommands[0][:4])
 	}
 }

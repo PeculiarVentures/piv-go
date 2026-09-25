@@ -258,6 +258,7 @@ func TestYubiKeyAdapterDeleteKeyClearsStaleTemplate(t *testing.T) {
 	enqueueManagementAuth(mock)
 	mock.SetSuccessResponse(0x47, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, seed)))
 	mock.SetSuccessResponse(0xDB, nil)
+	mock.SetSuccessResponse(0xA4, nil)
 	if _, err := NewAdapter().GenerateKey(newYubiKeyPolicySession(mock), piv.SlotSignature, piv.AlgEd25519, 0x00, 0x00); err != nil {
 		t.Fatalf("GenerateKey() error = %v", err)
 	}

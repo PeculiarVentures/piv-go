@@ -69,7 +69,7 @@ func (c *Client) VerifyPINWithType(pinType PINType, pin string) error {
 	}
 	sw := resp.StatusWord()
 	if retries, ok := iso7816.IsPINRetryStatus(sw); ok {
-		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining", retries)
+		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining: %w", retries, resp.Err())
 	}
 	if err := resp.Err(); err != nil {
 		return fmt.Errorf("piv: verify pin: %w", err)

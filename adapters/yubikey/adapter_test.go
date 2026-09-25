@@ -223,6 +223,7 @@ func TestYubiKeyAdapterDeleteKeyUsesMoveKey(t *testing.T) {
 	challengeResp := iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x81, challenge))
 
 	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xA4, nil)
 	mock.EnqueueResponse(0x87, challengeResp, uint16(iso7816.SwSuccess))
 	mock.EnqueueResponse(0x87, nil, uint16(iso7816.SwSuccess))
 	mock.SetSuccessResponse(0xF6, nil)
@@ -281,6 +282,7 @@ func TestYubiKeyAdapterDeleteKeyReportsUnsupportedFirmware(t *testing.T) {
 	challengeResp := iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x81, challenge))
 
 	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xA4, nil)
 	mock.EnqueueResponse(0x87, challengeResp, uint16(iso7816.SwSuccess))
 	mock.EnqueueResponse(0x87, nil, uint16(iso7816.SwSuccess))
 	mock.SetResponse(0xF6, nil, uint16(iso7816.SwInsNotSupported))
@@ -297,7 +299,7 @@ func TestYubiKeyAdapterDeleteKeyReportsUnsupportedFirmware(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported firmware error")
 	}
-	want := "delete YubiKey key from slot 9A: key deletion is not supported on firmware 5.6.0, requires 5.7.0 or later"
+	want := "delete YubiKey key from slot 9A (PIV applet version 5.6.0): key deletion is not supported on this firmware, requires 5.7.0 or later"
 	if err.Error() != want {
 		t.Fatalf("unexpected error: %q, want %q", err.Error(), want)
 	}

@@ -1,0 +1,107 @@
+package yubikey
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/PeculiarVentures/piv-go/adapters"
+	"github.com/PeculiarVentures/piv-go/iso7816"
+	"github.com/PeculiarVentures/piv-go/piv"
+)
+
+var otpAID = []byte{0xA0, 0x00, 0x00, 0x05, 0x27, 0x20, 0x01}
+
+// ErrOTPApplet marks an OTP applet operation that could not complete. The
+// wrapped cause remains available through errors.As and errors.Is.
+var ErrOTPApplet = errors.New("yubikey: OTP applet operation failed")
+
+// ErrPIVRestore marks failure to reselect PIV after an OTP operation. The
+// caller must discard its session because the selected applet is uncertain.
+var ErrPIVRestore = errors.New("yubikey: failed to restore PIV applet")
+
+// OTPAppletError identifies the failed OTP applet step and its cause.
+type OTPAppletError struct {
+	Step string
+	Err  error
+}
+
+func (e *OTPAppletError) Error() string {
+	return fmt.Sprintf("yubikey: %s: %v", e.Step, e.Err)
+}
+
+func (e *OTPAppletError) Unwrap() error { return e.Err }
+
+func (e *OTPAppletError) Is(target error) bool { return target == ErrOTPApplet }
+
+// OTPStatusVersion returns the version bytes reported by the OTP applet's
+// STATUS command. NEO can report a different patch version from the device
+// firmware, so callers should treat this as a capability hint, not as an
+// authoritative inventory value. The PIV applet is reselected before return.
+func (a *Adapter) OTPStatusVersion(session *adapters.Session) (string, error) {
+	if err := requireSessionClient(session); err != nil {
+		return "", err
+	}
+	data, err := executeOTP(session.Client, "read status", &iso7816.Command{
+		Cla: 0x00, Ins: 0x03, P1: 0x00, P2: 0x00, Le: -1,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(data) != 6 || data[0] == 0 {
+		return "", &OTPAppletError{Step: "parse status", Err: fmt.Errorf("invalid version data (%d bytes)", len(data))}
+	}
+	return fmt.Sprintf("%d.%d.%d", data[0], data[1], data[2]), nil
+}
+
+// SupportsDeleteKey reports whether OTP status indicates MOVE KEY support.
+// The command itself remains authoritative when OTP status is unavailable.
+func (a *Adapter) SupportsDeleteKey(session *adapters.Session) (bool, error) {
+	version, err := a.OTPStatusVersion(session)
+	if err != nil {
+		return false, err
+	}
+	return supportsDeleteKeyVersion(version)
+}
+
+func supportsDeleteKeyVersion(version string) (bool, error) {
+	parts, err := parseFirmwareVersion(version)
+	if err != nil {
+		return false, err
+	}
+	return parts[0] > 5 || parts[0] == 5 && (parts[1] > 7 || parts[1] == 7), nil
+}
+
+// executeOTP selects OTP, sends one command and always attempts to restore
+// PIV, even when OTP selection or the command fails. No data is returned if
+// restoration fails, because the calling session's applet state is uncertain.
+func executeOTP(client *piv.Client, step string, command *iso7816.Command) (data []byte, err error) {
+	defer func() {
+		if restoreErr := client.Select(); restoreErr != nil {
+			data = nil
+			err = errors.Join(err, ErrPIVRestore, &OTPAppletError{Step: "restore PIV applet", Err: restoreErr})
+		}
+	}()
+	selectResponse, err := client.Execute(&iso7816.Command{
+		Cla: 0x00, Ins: 0xA4, P1: 0x04, P2: 0x00, Data: otpAID, Le: 256,
+	})
+	if err != nil {
+		return nil, &OTPAppletError{Step: "select OTP applet", Err: err}
+	}
+	if selectResponse == nil {
+		return nil, &OTPAppletError{Step: "select OTP applet", Err: errors.New("missing response")}
+	}
+	if err := selectResponse.Err(); err != nil {
+		return nil, &OTPAppletError{Step: "select OTP applet", Err: err}
+	}
+	response, err := client.Execute(command)
+	if err != nil {
+		return nil, &OTPAppletError{Step: step, Err: err}
+	}
+	if response == nil {
+		return nil, &OTPAppletError{Step: step, Err: errors.New("missing response")}
+	}
+	if err := response.Err(); err != nil {
+		return nil, &OTPAppletError{Step: step, Err: err}
+	}
+	return append([]byte(nil), response.Data...), nil
+}

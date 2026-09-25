@@ -48,7 +48,7 @@ func (c *Client) VerifyPIN(pin string) error {
 	}
 	sw := resp.StatusWord()
 	if retries, ok := iso7816.IsPINRetryStatus(sw); ok {
-		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining", retries)
+		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining: %w", retries, resp.Err())
 	}
 	if err := resp.Err(); err != nil {
 		return fmt.Errorf("piv: verify pin: %w", err)
@@ -70,9 +70,8 @@ func (c *Client) GetCertificate(slot Slot) ([]byte, error) {
 	return cert, nil
 }
 
-// RSASignHashMode selects how Client.Sign formats an RSA-3072/4096
-// challenge. It is explicit so a 32-byte raw message under --hash none is
-// never confused with a SHA-256 digest.
+// RSASignHashMode selects how Client.Sign formats an RSA challenge. It is
+// explicit so a 32-byte raw message is never confused with a SHA-256 digest.
 type RSASignHashMode int
 
 const (
@@ -91,17 +90,14 @@ const (
 // Sign performs a GENERAL AUTHENTICATE operation to sign data using
 // the key in the specified slot with the given algorithm.
 //
-// RSA-3072/4096 apply host-side PKCS#1 v1.5 type-1 formatting so the
-// challenge is exactly modulus-length: the YubiKey 6 firmware performs the
-// raw RSA private-key operation and rejects short challenges with 6A8x. The
-// hashMode selects the format explicitly: RSASignHashSHA256 wraps a 32-byte
-// digest with the SHA-256 DigestInfo (CLI --hash sha256, after hashInput);
-// RSASignHashNone pads the message raw without DigestInfo (CLI --hash none,
-// mirroring ykman _pad_message in yubikit/piv.py:546 where RSA always
-// carries PKCS#1 v1.5 type-1 padding and raw means no DigestInfo, not
-// unpadded textbook RSA). hashMode is ignored for all other algorithms:
-// RSA-1024/2048 keep their existing wire behavior unchanged, Ed25519 and
-// ML-DSA sign the raw message without padding, X25519 cannot sign and
+// All RSA algorithms apply host-side PKCS#1 v1.5 type-1 formatting so the
+// challenge is exactly modulus-length. RSASignHashSHA256 expects a 32-byte
+// digest and wraps it in SHA-256 DigestInfo before padding. RSASignHashNone
+// pads data as supplied, including a caller-supplied DigestInfo. For
+// compatibility, an already encoded modulus-length block with hashMode None
+// passes through byte-for-byte; use Authenticate for other raw operations.
+// hashMode is ignored for non-RSA algorithms: Ed25519 and ML-DSA sign the raw
+// message without padding, X25519 cannot sign and
 // rejects with "x25519 cannot sign: use ECDH"; ML-KEM has no sign flow and
 // gap-rejects without sending an APDU.
 func (c *Client) Sign(alg byte, slot Slot, data []byte, hashMode RSASignHashMode) ([]byte, error) {
@@ -111,8 +107,8 @@ func (c *Client) Sign(alg byte, slot Slot, data []byte, hashMode RSASignHashMode
 	if IsMLKEMAlgorithm(alg) {
 		return nil, unsupportedExtendedAlgorithmError(fmt.Sprintf("sign with slot %s", slot), alg)
 	}
-	if alg == AlgRSA3072 || alg == AlgRSA4096 {
-		padded, err := formatExtendedRSAChallenge(alg, data, hashMode)
+	if _, ok := rsaModulusLength(alg); ok {
+		padded, err := formatRSAChallenge(alg, data, hashMode)
 		if err != nil {
 			return nil, err
 		}
@@ -167,8 +163,8 @@ func (c *Client) Sign(alg byte, slot Slot, data []byte, hashMode RSASignHashMode
 // firmware without extended-APDU support (for example YubiKey NEO) rejects
 // a single extended-length AUTHENTICATE with 6700, while host-padded RSA
 // challenges always exceed 255 bytes. Payloads within the short limit go
-// out byte-for-byte as before, and the challenge padding itself is
-// untouched: callers format data before this point.
+// out byte-for-byte as before. Sign formats its challenge before this point;
+// Authenticate accepts caller-supplied challenge bytes unchanged.
 func (c *Client) sendAuthenticate(cmd *iso7816.Command) (*iso7816.Response, error) {
 	if len(cmd.Data) <= 0xFF {
 		return c.sendCommand(cmd)
@@ -217,10 +213,13 @@ var sha256DigestInfoPrefix = []byte{
 	0x00, 0x04, 0x20,
 }
 
-// extendedRSAModulusLength returns the modulus byte length for the YubiKey 6
-// RSA extension algorithms that require host-side challenge formatting.
-func extendedRSAModulusLength(algorithm byte) (int, bool) {
+// rsaModulusLength returns the modulus byte length for a PIV RSA algorithm.
+func rsaModulusLength(algorithm byte) (int, bool) {
 	switch algorithm {
+	case AlgRSA1024:
+		return 128, true
+	case AlgRSA2048:
+		return 256, true
 	case AlgRSA3072:
 		return 384, true
 	case AlgRSA4096:
@@ -230,7 +229,7 @@ func extendedRSAModulusLength(algorithm byte) (int, bool) {
 	}
 }
 
-// formatExtendedRSAChallenge formats a sign challenge for RSA-3072/4096 as a
+// formatRSAChallenge formats a sign challenge for all RSA sizes as a
 // PKCS#1 v1.5 type-1 encryption block of exactly modulus length: EM = 00 01
 // FF..FF 00 || T. The hashMode is explicit: RSASignHashSHA256 requires a
 // 32-byte SHA-256 digest and wraps it with the DigestInfo prefix, while
@@ -238,10 +237,13 @@ func extendedRSAModulusLength(algorithm byte) (int, bool) {
 // ykman _pad_message (yubikit/piv.py:546): RSA always carries PKCS#1 v1.5
 // type-1 padding, so raw means "no DigestInfo", not unpadded textbook RSA.
 // Oversize messages are rejected before any APDU is sent.
-func formatExtendedRSAChallenge(algorithm byte, data []byte, hashMode RSASignHashMode) ([]byte, error) {
-	k, ok := extendedRSAModulusLength(algorithm)
+func formatRSAChallenge(algorithm byte, data []byte, hashMode RSASignHashMode) ([]byte, error) {
+	k, ok := rsaModulusLength(algorithm)
 	if !ok {
 		return nil, fmt.Errorf("piv: unsupported RSA challenge algorithm 0x%02X", algorithm)
+	}
+	if hashMode == RSASignHashNone && len(data) == k {
+		return append([]byte(nil), data...), nil
 	}
 	var t []byte
 	switch hashMode {

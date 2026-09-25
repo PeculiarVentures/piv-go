@@ -123,6 +123,7 @@ func TestAttestOldFirmwareMapsToUnsupportedCapability(t *testing.T) {
 	card := emulator.NewCard()
 	card.SetSuccessResponse(0xA4, nil)
 	card.SetSuccessResponse(0xFD, []byte{0x04, 0x02, 0x09})
+	card.SetSuccessResponse(0x03, []byte{0x04, 0x02, 0x09, 0, 0, 0})
 	card.SetSuccessResponse(0xF9, []byte{0x30, 0x00})
 	info := NewInfoService(newAttestationGuardTargets(card))
 	_, err := info.Attest(context.Background(), ExportRequest{

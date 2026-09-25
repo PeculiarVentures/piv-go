@@ -7,12 +7,17 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"fmt"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
 	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
+
+// ErrKeyDeletionUnsupported reports that MOVE KEY is unavailable on this
+// token. Callers can use errors.Is to detect it regardless of version text.
+var ErrKeyDeletionUnsupported = errors.New("key deletion is not supported on this firmware, requires 5.7.0 or later")
 
 // YubiKey key management instructions and policy extension tags.
 const (
@@ -237,7 +242,20 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 
 // DeleteKey removes a private key from a YubiKey slot.
 func (a *Adapter) DeleteKey(session *adapters.Session, slot piv.Slot) error {
+	if err := requireSessionClient(session); err != nil {
+		return err
+	}
 	session.Observe(adapters.LogLevelInfo, a, "delete-key", "starting YubiKey key deletion for %s", slot)
+	// NEO's PIV GET VERSION may report the PIV applet's 1.x version,
+	// while OTP status reports the older device generation more reliably.
+	// Reject known-old tokens before management authentication or MOVE KEY.
+	if version, err := a.OTPStatusVersion(session); errors.Is(err, ErrPIVRestore) {
+		return fmt.Errorf("delete YubiKey key from slot %s: %w", slot, err)
+	} else if err == nil {
+		if supported, err := supportsDeleteKeyVersion(version); err == nil && !supported {
+			return fmt.Errorf("delete YubiKey key from slot %s (OTP status %s): %w", slot, version, ErrKeyDeletionUnsupported)
+		}
+	}
 	if err := session.AuthenticateManagementKey(a); err != nil {
 		return fmt.Errorf("authenticate management key: %w", err)
 	}
@@ -256,11 +274,11 @@ func (a *Adapter) DeleteKey(session *adapters.Session, slot piv.Slot) error {
 	}
 	if err := resp.Err(); err != nil {
 		if iso7816.IsStatus(err, iso7816.SwInsNotSupported) {
-			session.Observe(adapters.LogLevelInfo, a, "delete-key", "firmware rejected key deletion command, checking device version")
+			session.Observe(adapters.LogLevelInfo, a, "delete-key", "token rejected MOVE KEY")
 			if version, versionErr := readVersion(session.Client); versionErr == nil {
-				return fmt.Errorf("delete YubiKey key from slot %s: key deletion is not supported on firmware %s, requires 5.7.0 or later", slot, version)
+				return fmt.Errorf("delete YubiKey key from slot %s (PIV applet version %s): %w", slot, version, ErrKeyDeletionUnsupported)
 			}
-			return fmt.Errorf("delete YubiKey key from slot %s: key deletion is not supported on this firmware, requires 5.7.0 or later", slot)
+			return fmt.Errorf("delete YubiKey key from slot %s: %w", slot, ErrKeyDeletionUnsupported)
 		}
 		return fmt.Errorf("delete YubiKey key from slot %s: %w", slot, err)
 	}

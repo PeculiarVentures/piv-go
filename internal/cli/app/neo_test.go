@@ -560,7 +560,7 @@ func TestNEOKeyDeleteUnsupportedExit4(t *testing.T) {
 	if mapped.Hint != "inspect capabilities with piv info" {
 		t.Fatalf("unexpected hint %q", mapped.Hint)
 	}
-	want := "delete YubiKey key from slot 9C: key deletion is not supported on firmware 3.4.9, requires 5.7.0 or later"
+	want := "delete YubiKey key from slot 9C (PIV applet version 3.4.9): key deletion is not supported on this firmware, requires 5.7.0 or later"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %q, want substring %q", err.Error(), want)
 	}
