@@ -237,9 +237,9 @@ func parseOpaquePublicKey(algorithm byte, tlvs []*iso7816.TLV, tag uint) (crypto
 // interface after on-device key generation. YubiKey 6 RSA-3072/4096,
 // Ed25519/X25519, ML-DSA, and ML-KEM keys are supported.
 func (c *Client) StoreGeneratedPublicKey(slot Slot, algorithm byte, publicKey crypto.PublicKey) error {
-	tag := slotToObjectID(slot)
-	if tag == 0 {
-		return fmt.Errorf("unsupported slot %s", slot)
+	tag, err := ObjectIDForSlot(slot)
+	if err != nil {
+		return err
 	}
 
 	publicKeyTemplate, err := encodeGeneratedPublicKeyTemplate(algorithm, publicKey)

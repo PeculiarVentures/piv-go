@@ -70,8 +70,10 @@ func TestYubiKeyAdapterAttestKeyValidatesSlots(t *testing.T) {
 		piv.SlotSignature:      true,
 		piv.SlotKeyManagement:  true,
 		piv.SlotCardAuth:       true,
+		piv.Slot(0x82):         true,
+		piv.Slot(0x95):         true,
 	}
-	for _, slot := range []piv.Slot{piv.SlotAuthentication, piv.SlotManagement, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth, SlotAttestation} {
+	for _, slot := range []piv.Slot{piv.SlotAuthentication, piv.SlotManagement, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth, piv.Slot(0x81), piv.Slot(0x82), piv.Slot(0x95), piv.Slot(0x96), SlotAttestation} {
 		mock := emulator.NewCard()
 		mock.SetSuccessResponse(0xFD, []byte{0x05, 0x07, 0x00})
 		mock.SetSuccessResponse(0xF9, der)
@@ -91,6 +93,30 @@ func TestYubiKeyAdapterAttestKeyValidatesSlots(t *testing.T) {
 		}
 		if !bytes.Equal(got, der) {
 			t.Fatalf("AttestKey(%s) must return the raw DER attestation certificate", slot)
+		}
+	}
+}
+
+func TestIsAttestableSlot(t *testing.T) {
+	tests := []struct {
+		slot piv.Slot
+		want bool
+	}{
+		{slot: piv.SlotAuthentication, want: true},
+		{slot: piv.SlotSignature, want: true},
+		{slot: piv.SlotKeyManagement, want: true},
+		{slot: piv.SlotCardAuth, want: true},
+		{slot: 0x82, want: true},
+		{slot: 0x8A, want: true},
+		{slot: 0x95, want: true},
+		{slot: 0x81, want: false},
+		{slot: 0x96, want: false},
+		{slot: piv.SlotManagement, want: false},
+		{slot: SlotAttestation, want: false},
+	}
+	for _, test := range tests {
+		if got := isAttestableSlot(test.slot); got != test.want {
+			t.Fatalf("isAttestableSlot(%s) = %v, want %v", test.slot, got, test.want)
 		}
 	}
 }

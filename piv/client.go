@@ -58,7 +58,10 @@ func (c *Client) VerifyPIN(pin string) error {
 
 // GetCertificate reads the certificate from the specified slot.
 func (c *Client) GetCertificate(slot Slot) ([]byte, error) {
-	tag := slotToObjectID(slot)
+	tag, err := ObjectIDForSlot(slot)
+	if err != nil {
+		return nil, fmt.Errorf("piv: get certificate from slot %s: %w", slot, err)
+	}
 	data, err := c.GetData(tag)
 	if err != nil {
 		return nil, fmt.Errorf("piv: get certificate from slot %s: %w", slot, err)
@@ -94,8 +97,10 @@ const (
 // challenge is exactly modulus-length. RSASignHashSHA256 expects a 32-byte
 // digest and wraps it in SHA-256 DigestInfo before padding. RSASignHashNone
 // pads data as supplied, including a caller-supplied DigestInfo. For
-// compatibility, an already encoded modulus-length block with hashMode None
-// passes through byte-for-byte; use Authenticate for other raw operations.
+// compatibility, an already encoded RSA-1024/2048 modulus-length block with
+// hashMode None passes through byte-for-byte; RSA-3072/4096 always pad and
+// reject oversize input before any APDU. Use Authenticate for other raw
+// operations.
 // hashMode is ignored for non-RSA algorithms: Ed25519 and ML-DSA sign the raw
 // message without padding, X25519 cannot sign and
 // rejects with "x25519 cannot sign: use ECDH"; ML-KEM has no sign flow and
@@ -236,13 +241,16 @@ func rsaModulusLength(algorithm byte) (int, bool) {
 // RSASignHashNone pads the message raw without DigestInfo. Raw here follows
 // ykman _pad_message (yubikit/piv.py:546): RSA always carries PKCS#1 v1.5
 // type-1 padding, so raw means "no DigestInfo", not unpadded textbook RSA.
+// Only legacy RSA-1024/2048 keep a byte-for-byte passthrough for an already
+// encoded modulus-length block under hashMode None; RSA-3072/4096 always pad
+// so a modulus-length plain file is rejected as too long before any APDU.
 // Oversize messages are rejected before any APDU is sent.
 func formatRSAChallenge(algorithm byte, data []byte, hashMode RSASignHashMode) ([]byte, error) {
 	k, ok := rsaModulusLength(algorithm)
 	if !ok {
 		return nil, fmt.Errorf("piv: unsupported RSA challenge algorithm 0x%02X", algorithm)
 	}
-	if hashMode == RSASignHashNone && len(data) == k {
+	if hashMode == RSASignHashNone && len(data) == k && (algorithm == AlgRSA1024 || algorithm == AlgRSA2048) {
 		return append([]byte(nil), data...), nil
 	}
 	var t []byte

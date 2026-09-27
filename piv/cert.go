@@ -28,7 +28,10 @@ func (c *Client) PutCertificate(slot Slot, certData []byte) error {
 	certObj = append(certObj, iso7816.EncodeTLV(0x71, []byte{0x00})...)
 	certObj = append(certObj, iso7816.EncodeTLV(0xFE, nil)...)
 
-	tag := slotToObjectID(slot)
+	tag, err := ObjectIDForSlot(slot)
+	if err != nil {
+		return fmt.Errorf("piv: put certificate slot %s: %w", slot, err)
+	}
 	dataTLV := iso7816.EncodeTLV(0x53, certObj)
 	if err := c.PutData(tag, dataTLV); err != nil {
 		return fmt.Errorf("piv: put certificate slot %s: %w", slot, err)

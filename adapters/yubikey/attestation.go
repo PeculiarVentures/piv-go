@@ -37,10 +37,10 @@ const attestationMinVersion = "4.3.0"
 // AttestKey returns the raw DER attestation certificate for the key in the
 // specified slot.
 //
-// Only the user key slots 9A/9C/9D/9E can be attested and the token must
-// support attestation (YubiKey firmware 4.3.0 or later). The returned bytes
-// are the raw DER-encoded X.509 certificate without verification, mirroring
-// yubikit's attest_key transport
+// Only user key slots can be attested: 9A/9C/9D/9E and the retired key
+// management slots 0x82..0x95. The token must support attestation (YubiKey
+// firmware 4.3.0 or later). The returned bytes are the raw DER-encoded X.509
+// certificate without verification, mirroring yubikit's attest_key transport
 // (00 F9 <slot> 00) while leaving chain validation to the caller.
 func (a *Adapter) AttestKey(session *adapters.Session, slot piv.Slot) ([]byte, error) {
 	if err := requireSessionClient(session); err != nil {
@@ -125,14 +125,15 @@ func (a *Adapter) AttestationCertificate(session *adapters.Session) ([]byte, err
 }
 
 // isAttestableSlot reports whether the slot holds a user key that YubiKey
-// attestation supports.
+// attestation supports: the standard user slots 9A/9C/9D/9E and the retired
+// key management slots 0x82..0x95 (Yubico documents attestation for both
+// ranges). The management slot 9B and the attestation slot F9 are rejected.
 func isAttestableSlot(slot piv.Slot) bool {
 	switch slot {
 	case piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth:
 		return true
-	default:
-		return false
 	}
+	return piv.IsRetiredSlot(slot)
 }
 
 // isPreviewPlaceholderVersion reports whether the firmware version string
