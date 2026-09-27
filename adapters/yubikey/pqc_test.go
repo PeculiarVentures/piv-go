@@ -282,6 +282,9 @@ func TestYubiKeyAdapterDeleteKeyClearsStaleTemplate(t *testing.T) {
 	if description.KeyPresent {
 		t.Fatal("slot must report no key after generate->delete")
 	}
+	if description.KeyUnknown {
+		t.Fatal("slot with authoritative empty metadata must not be unknown")
+	}
 	if description.CertPresent {
 		t.Fatal("slot must report no certificate after generate->delete")
 	}

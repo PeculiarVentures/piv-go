@@ -84,6 +84,9 @@ func (m *ErrorMapper) Map(err error) *CLIError {
 		return UnsupportedError("token label is not available on the selected token", "rerun with piv info --sections summary")
 	}
 	if status, ok := iso7816.StatusWordFromError(err); ok {
+		if retries, ok := iso7816.IsPINRetryStatus(status); ok {
+			return AuthError("PIN verification failed", fmt.Sprintf("verify the PIN and retry; %d retries remain", retries), err)
+		}
 		switch status {
 		case iso7816.SwFileNotFound, iso7816.SwReferencedDataNotFound:
 			return NotFoundError("the requested slot or object is not present", "inspect the token with piv slot list or piv diag object list", err)

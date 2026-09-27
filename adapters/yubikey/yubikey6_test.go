@@ -89,9 +89,8 @@ func TestYubiKeyAdapterVersionReturnsPreviewRaw(t *testing.T) {
 }
 
 func TestYubiKeyAdapterGenerateImportGapWithoutAPDU(t *testing.T) {
-	// ML-KEM generates on-card; only the ML-DSA import gap and the
-	// ML-KEM-512 import gap (no standard library encapsulation key
-	// derivation for the stored object) reject without an APDU.
+	// ML-KEM generates on-card; only the ML-DSA import gap rejects
+	// without an APDU. ML-KEM-512 now derives via circl and imports.
 	for _, algorithm := range []byte{piv.AlgMLDSA44, piv.AlgMLDSA65, piv.AlgMLDSA87} {
 		mock := emulator.NewCard()
 		if err := NewAdapter().ImportKey(newYubiKeyPolicySession(mock), piv.SlotSignature, algorithm, "not-a-key", 0x00, 0x00); err == nil || !strings.Contains(err.Error(), "not supported") {
@@ -101,14 +100,24 @@ func TestYubiKeyAdapterGenerateImportGapWithoutAPDU(t *testing.T) {
 			t.Fatalf("import 0x%02X: no APDU must be sent on rejection, got %d commands", algorithm, len(mock.TransmittedCommands))
 		}
 	}
-	{
-		mock := emulator.NewCard()
-		if err := NewAdapter().ImportKey(newYubiKeyPolicySession(mock), piv.SlotSignature, piv.AlgMLKEM512, bytes.Repeat([]byte{0xD5}, piv.MLKEMSeedLength), 0x00, 0x00); err == nil || !strings.Contains(err.Error(), "not supported") {
-			t.Fatalf("import ML-KEM-512: expected not-supported error, got %v", err)
-		}
-		if len(mock.TransmittedCommands) != 0 {
-			t.Fatalf("import ML-KEM-512: no APDU must be sent on rejection, got %d commands", len(mock.TransmittedCommands))
-		}
+}
+
+func TestYubiKeyAdapterImportMLKEM512SendsAPDU(t *testing.T) {
+	// ML-KEM-512 derives the 800-byte encapsulation key via circl and
+	// issues IMPORT KEY + PUT DATA like the other ML-KEM variants.
+	mock := emulator.NewCard()
+	enqueueManagementAuth(mock)
+	mock.SetSuccessResponse(InsImportKey, nil)
+	mock.SetSuccessResponse(0xDB, nil)
+	seed := bytes.Repeat([]byte{0xD5}, piv.MLKEMSeedLength)
+	if err := NewAdapter().ImportKey(newYubiKeyPolicySession(mock), piv.SlotSignature, piv.AlgMLKEM512, seed, 0x00, 0x00); err != nil {
+		t.Fatalf("ImportKey(ML-KEM-512) error = %v", err)
+	}
+	if findCommand(mock, InsImportKey) == nil {
+		t.Fatal("ML-KEM-512 import must send IMPORT KEY")
+	}
+	if findCommand(mock, 0xDB) == nil {
+		t.Fatal("ML-KEM-512 import must store the derived public key with PUT DATA")
 	}
 }
 

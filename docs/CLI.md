@@ -118,14 +118,13 @@ to require touch confirmation for management operations.
   Ed/X `86`, ML-DSA `87`, ML-KEM `88` with 800/1184/1568 bytes).
 - Import implements RSA-3072/4096 (halves 192/256 bytes, tags `01-05`,
   `e=65537`, two primes), Ed25519/X25519 (tag `07`/`08`, 32-byte raw
-  seed), and ML-KEM-768/1024 (tag `0x0A`, 64-byte raw seed `d||z`,
+  seed), and ML-KEM-512/768/1024 (tag `0x0A`, 64-byte raw seed `d||z`,
   identical for every variant; the card expands it into the full
-  decapsulation key). Supply `--in` as PEM/DER (PKCS #8 round-trips for
+  decapsulation key, the host derives the stored encapsulation key via
+  circl for 512 and the standard library for 768/1024). Supply `--in` as PEM/DER (PKCS #8 round-trips for
   RSA/EC/Ed25519/X25519) or raw bytes as binary, hex, or base64 (required
-  for ML-KEM, which has no PEM/DER encoding here). ML-KEM-512 import
-  stays unsupported (no standard library implementation to derive the
-  stored encapsulation key) and ML-DSA has no import APDU: both
-  gap-reject with `not supported` before any APDU.
+  for ML-KEM, which has no PEM/DER encoding here). ML-DSA has no import APDU and
+  gap-rejects with `not supported` before any APDU.
 - Sign implements Ed25519 and ML-DSA over the raw message
   (`00 87 <alg> <slot> 7C{82 empty, 81 msg}`). RSA-3072/4096 apply host-side
   PKCS#1 v1.5 type-1 formatting so the challenge is exactly modulus-length
@@ -143,7 +142,8 @@ to require touch confirmation for management operations.
   on an ML-KEM slot runs `00 87 <alg> <slot> 7C{82 empty, 86 ciphertext}`
   and returns the 32-byte shared secret (result kind `kem-secret`).
   The ciphertext is 768/1088/1568 bytes for ML-KEM-512/768/1024.
-  Encapsulation stays host-side (for example with `crypto/mlkem`):
+  Encapsulation stays host-side (for example with `crypto/mlkem` for
+  768/1024 and circl `mlkem512` for 512):
   the card only decapsulates. Supply `--pin-env`/`--pin-stdin` when the
   slot PIN policy requires verification (the token answers `6982`
   otherwise).

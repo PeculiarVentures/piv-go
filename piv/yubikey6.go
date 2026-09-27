@@ -3,6 +3,8 @@ package piv
 import (
 	"crypto/mlkem"
 	"fmt"
+
+	"github.com/cloudflare/circl/kem/mlkem/mlkem512"
 )
 
 // OpaquePublicKey carries the raw public key bytes for YubiKey 6 algorithms
@@ -161,11 +163,10 @@ func MLKEMCiphertextLength(algorithm byte) (int, bool) {
 }
 
 // MLKEMEncapsulationKeyFromSeed derives the encapsulation (public) key from
-// a raw ML-KEM seed (FIPS 203 d||z, 64 bytes) using the standard library.
-// ML-KEM-768 and ML-KEM-1024 are supported; ML-KEM-512 has no standard
-// library implementation and reports an unsupported-algorithm error so
-// callers can gap-reject without sending an APDU. Unknown algorithms and
-// wrong seed lengths are rejected before any use of the bytes.
+// a raw ML-KEM seed (FIPS 203 d||z, 64 bytes). ML-KEM-768 and ML-KEM-1024
+// use the standard library; ML-KEM-512 uses circl mlkem512. Unknown
+// algorithms and wrong seed lengths are rejected before any use of the
+// bytes.
 func MLKEMEncapsulationKeyFromSeed(algorithm byte, seed []byte) ([]byte, error) {
 	if !IsMLKEMAlgorithm(algorithm) {
 		return nil, fmt.Errorf("piv: unsupported ML-KEM algorithm 0x%02X", algorithm)
@@ -174,6 +175,11 @@ func MLKEMEncapsulationKeyFromSeed(algorithm byte, seed []byte) ([]byte, error) 
 		return nil, fmt.Errorf("piv: unsupported ML-KEM seed length %d for algorithm 0x%02X, must be %d bytes", len(seed), algorithm, MLKEMSeedLength)
 	}
 	switch algorithm {
+	case AlgMLKEM512:
+		public, _ := mlkem512.NewKeyFromSeed(seed)
+		raw := make([]byte, mlkem512.PublicKeySize)
+		public.Pack(raw)
+		return raw, nil
 	case AlgMLKEM768:
 		key, err := mlkem.NewDecapsulationKey768(seed)
 		if err != nil {

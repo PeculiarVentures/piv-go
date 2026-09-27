@@ -306,9 +306,9 @@ func (c *cli) newKeyCommand() *cobra.Command {
 			})
 		},
 	}
-	importKey.Flags().StringVar(&importAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mlkem768, mlkem1024 (mldsa and mlkem512 parse then gap-reject import)")
+	importKey.Flags().StringVar(&importAlgorithm, "alg", "", "Key algorithm: p256, p384, rsa1024, rsa2048, rsa3072, rsa4096, ed25519, x25519, mlkem512, mlkem768, mlkem1024 (mldsa has no import flow)")
 	_ = importKey.MarkFlagRequired("alg")
-	importKey.Flags().StringVar(&importPath, "in", "", "Read the private key from a PEM or DER file (ed25519/x25519 also accept a raw 32-byte seed, mlkem768/mlkem1024 a raw 64-byte seed, as binary, hex, or base64)")
+	importKey.Flags().StringVar(&importPath, "in", "", "Read the private key from a PEM or DER file (ed25519/x25519 also accept a raw 32-byte seed, mlkem512/mlkem768/mlkem1024 a raw 64-byte seed, as binary, hex, or base64)")
 	_ = importKey.MarkFlagRequired("in")
 	importKey.Flags().BoolVar(&importMGMStdin, "mgm-stdin", false, "Read the management key from stdin")
 	importKey.Flags().StringVar(&importMGMEnv, "mgm-env", "", "Read the management key from the specified environment variable")

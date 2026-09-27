@@ -11,6 +11,13 @@ import (
 
 var otpAID = []byte{0xA0, 0x00, 0x00, 0x05, 0x27, 0x20, 0x01}
 
+// ErrCapabilityUnknown reports that OTP status comes from preview firmware
+// (major version 0, for example raw status 0.0.1) and cannot establish
+// whether the token supports an operation. Callers must not treat
+// (false, ErrCapabilityUnknown) as definitely unsupported; they should
+// probe the card command itself, which remains authoritative.
+var ErrCapabilityUnknown = errors.New("yubikey: capability unknown for preview firmware")
+
 // ErrOTPApplet marks an OTP applet operation that could not complete. The
 // wrapped cause remains available through errors.As and errors.Is.
 var ErrOTPApplet = errors.New("yubikey: OTP applet operation failed")
@@ -55,6 +62,10 @@ func (a *Adapter) OTPStatusVersion(session *adapters.Session) (string, error) {
 
 // SupportsDeleteKey reports whether OTP status indicates MOVE KEY support.
 // The command itself remains authoritative when OTP status is unavailable.
+// The return contract is explicit: (true, nil) means definitely supported,
+// (false, nil) means definitely unsupported, and (false, ErrCapabilityUnknown)
+// means support is unknown (preview firmware such as raw status 0.0.1) so the
+// caller should probe the MOVE KEY command itself.
 func (a *Adapter) SupportsDeleteKey(session *adapters.Session) (bool, error) {
 	version, err := a.OTPStatusVersion(session)
 	if err != nil {
@@ -69,7 +80,7 @@ func supportsDeleteKeyVersion(version string) (bool, error) {
 		return false, err
 	}
 	if parts[0] == 0 {
-		return false, fmt.Errorf("yubikey: preview OTP status %s cannot establish MOVE KEY support", version)
+		return false, fmt.Errorf("yubikey: preview OTP status %s cannot establish MOVE KEY support: %w", version, ErrCapabilityUnknown)
 	}
 	return parts[0] > 5 || parts[0] == 5 && (parts[1] > 7 || parts[1] == 7), nil
 }

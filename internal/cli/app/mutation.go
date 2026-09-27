@@ -358,12 +358,12 @@ func (s *MutationService) KeyGenerate(ctx context.Context, request KeyGenerateRe
 }
 
 // KeyImport imports a private key into a slot. RSA-1024/2048/3072/4096,
-// ECCP-256/384, Ed25519, X25519, and ML-KEM-768/1024 are implemented;
+// ECCP-256/384, Ed25519, X25519, and ML-KEM-512/768/1024 are implemented;
 // Ed25519/X25519 accept PKCS #8 or a raw 32-byte seed (binary, hex, or
 // base64) via --in, while ML-KEM accepts the raw 64-byte seed (binary, hex,
-// or base64) via --in. ML-KEM-512 import stays unsupported (no standard
-// library implementation to derive the stored encapsulation key) and
-// ML-DSA has no import APDU; both gap-reject without sending a command.
+// or base64) via --in (512 derives via circl, 768/1024 via the standard
+// library). ML-DSA has no import APDU and gap-rejects without sending a
+// command.
 func (s *MutationService) KeyImport(ctx context.Context, request KeyImportRequest) (response Response, err error) {
 	if err := rejectAttestationSlot(request.Slot); err != nil {
 		return Response{}, err
@@ -516,13 +516,6 @@ func checkImportKeyMatch(algorithm byte, privateKey crypto.PrivateKey) error {
 			return UsageError(fmt.Sprintf("import key type mismatch: x25519 requires an X25519 private key, got %T", privateKey), "provide an X25519 private key for --alg x25519")
 		}
 	case piv.AlgMLKEM512, piv.AlgMLKEM768, piv.AlgMLKEM1024:
-		if algorithm == piv.AlgMLKEM512 {
-			// The card accepts ML-KEM-512 seeds, but this release
-			// cannot derive the encapsulation key for the stored
-			// public key object without a standard library
-			// implementation.
-			return UnsupportedError(fmt.Sprintf("key import for algorithm %s is not supported by this release", AlgorithmName(algorithm)), "use mlkem768 or mlkem1024 for key import")
-		}
 		switch key := privateKey.(type) {
 		case *piv.OpaquePrivateKey:
 			if key == nil || len(key.Raw) != piv.MLKEMSeedLength {
@@ -594,6 +587,13 @@ func (s *MutationService) KeyDelete(ctx context.Context, request DeleteRequest, 
 	slotView, err := describeSlot(target.Runtime, request.Slot)
 	if err != nil {
 		return Response{}, err
+	}
+	if slotView.KeyUnknown {
+		return Response{}, InternalError(
+			fmt.Sprintf("slot %s key state is unknown", SlotName(request.Slot)),
+			"inspect slot state with piv slot show <slot>",
+			fmt.Errorf("cannot confirm key absence for slot %s: slot key state is unknown", SlotName(request.Slot)),
+		)
 	}
 	if !slotView.KeyPresent {
 		response := Response{Command: "key-delete", Target: target.Summary, Result: MutationResult{Action: "key-delete", Changed: false, Notes: []string{"key is already absent"}}}

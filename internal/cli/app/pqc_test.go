@@ -312,20 +312,74 @@ func TestKeyImportMLKEM768Seed(t *testing.T) {
 	}
 }
 
-func TestKeyImportMLKEM512GapNoAPDU(t *testing.T) {
+func TestKeyImportMLKEM512Seed(t *testing.T) {
+	// ML-KEM-512 now imports via circl-derived 800-byte encapsulation key.
 	seed := bytes.Repeat([]byte{0xD5}, piv.MLKEMSeedLength)
+	wantEK, err := piv.MLKEMEncapsulationKeyFromSeed(piv.AlgMLKEM512, seed)
+	if err != nil {
+		t.Fatalf("MLKEMEncapsulationKeyFromSeed(512) error = %v", err)
+	}
+	if len(wantEK) != 800 {
+		t.Fatalf("want 800-byte EK, got %d", len(wantEK))
+	}
 	path := filepath.Join(t.TempDir(), "mlkem512.seed")
 	if err := os.WriteFile(path, seed, 0o644); err != nil {
 		t.Fatalf("write seed: %v", err)
 	}
 	card := emulator.NewCard()
-	service := NewMutationService(newPQCResolver(card, ""), nil, bytes.NewReader(nil), &bytes.Buffer{})
-	_, err := service.KeyImport(context.Background(), KeyImportRequest{Slot: piv.SlotSignature, Algorithm: piv.AlgMLKEM512, AlgorithmName: "mlkem512", Path: path})
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("expected not-supported gap, got %v", err)
+	stubSelect(card)
+	enqueueManagementAuthPair(card, 2)
+	card.SetSuccessResponse(0xFE, nil)
+	card.SetSuccessResponse(0xDB, nil)
+	targets := NewTargetResolver(mutationTestCardContextFactory{builders: map[string]func() piv.Card{
+		"YubiKey Test": func() piv.Card { return card },
+	}}, nil, bytes.NewReader(nil), &bytes.Buffer{})
+	service := NewMutationService(targets, NewOperationPlanner(bytes.NewReader(nil), &bytes.Buffer{}), bytes.NewReader(nil), &bytes.Buffer{})
+	t.Setenv("PIV_MANAGEMENT_KEY", "01020304050607080102030405060708")
+	_, err = service.KeyImport(context.Background(), KeyImportRequest{
+		Global:        GlobalOptions{Reader: "YubiKey Test", NonInteractive: true},
+		Slot:          piv.SlotSignature,
+		Algorithm:     piv.AlgMLKEM512,
+		AlgorithmName: "mlkem512",
+		Path:          path,
+		ManagementKey: SecretRequest{EnvVar: "PIV_MANAGEMENT_KEY"},
+	})
+	if err != nil {
+		t.Fatalf("KeyImport(mlkem512 seed) error = %v", err)
 	}
-	if len(card.TransmittedCommands) != 0 {
-		t.Fatalf("gap must send no APDU, got %d", len(card.TransmittedCommands))
+	found := false
+	for _, raw := range card.TransmittedCommands {
+		if len(raw) > 1 && raw[1] == 0xFE {
+			cmd, err := iso7816.ParseCommand(raw)
+			if err != nil {
+				t.Fatalf("parse import: %v", err)
+			}
+			if cmd.P1 != piv.AlgMLKEM512 {
+				t.Fatalf("P1 = 0x%02X, want 0xE5", cmd.P1)
+			}
+			tlvs, _ := iso7816.ParseAllTLV(cmd.Data)
+			tag := iso7816.FindTag(tlvs, 0x0A)
+			if tag == nil || !bytes.Equal(tag.Value, seed) {
+				t.Fatalf("tag 0x0A must carry the 64-byte seed in %X", cmd.Data[:16])
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected IMPORT KEY APDU")
+	}
+	var stored []byte
+	for _, raw := range card.TransmittedCommands {
+		if len(raw) > 1 && raw[1] == 0xDB {
+			chunk, err := iso7816.ParseCommand(raw)
+			if err != nil {
+				t.Fatalf("parse PUT DATA: %v", err)
+			}
+			stored = append(stored, chunk.Data...)
+		}
+	}
+	if !bytes.Contains(stored, wantEK) {
+		t.Fatal("stored slot object must contain the derived encapsulation key")
 	}
 }
 

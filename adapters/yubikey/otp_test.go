@@ -252,3 +252,13 @@ func TestSupportsDeleteKeyAtFirmwareBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestSupportsDeleteKeyPreviewIsUnknown(t *testing.T) {
+	supported, err := supportsDeleteKeyVersion("0.0.1")
+	if supported {
+		t.Fatalf("preview support = %v; want false", supported)
+	}
+	if !errors.Is(err, ErrCapabilityUnknown) {
+		t.Fatalf("preview error = %v; want ErrCapabilityUnknown", err)
+	}
+}

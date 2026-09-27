@@ -11,7 +11,6 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
@@ -112,18 +111,19 @@ func TestKeyImportRejectsUnsupportedAlgorithm(t *testing.T) {
 	}
 }
 
-func TestKeyImportRejectsMLKEM512WithoutAPDU(t *testing.T) {
-	// ML-KEM-512 import stays unsupported: the standard library cannot
-	// derive the stored encapsulation key from the seed. The rejection
-	// fires on the parsed seed before any target is resolved.
-	seedPath := filepath.Join(t.TempDir(), "mlkem512.seed")
-	if err := os.WriteFile(seedPath, bytes.Repeat([]byte{0xD5}, piv.MLKEMSeedLength), 0o644); err != nil {
-		t.Fatalf("write seed: %v", err)
+func TestKeyImportMLKEM512SeedValidates(t *testing.T) {
+	// ML-KEM-512 now derives via circl: a 64-byte seed must pass
+	// import validation instead of gap-rejecting.
+	seed := bytes.Repeat([]byte{0xD5}, piv.MLKEMSeedLength)
+	privateKey, err := ParsePrivateKeyForAlgorithm(seed, piv.AlgMLKEM512)
+	if err != nil {
+		t.Fatalf("ParsePrivateKeyForAlgorithm(512) error = %v", err)
 	}
-	service := NewMutationService(nil, nil, bytes.NewReader(nil), &bytes.Buffer{})
-	_, err := service.KeyImport(context.Background(), KeyImportRequest{Slot: piv.SlotSignature, Algorithm: piv.AlgMLKEM512, AlgorithmName: "mlkem512", Path: seedPath})
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("expected not-supported gap, got %v", err)
+	if err := checkImportKeyMatch(piv.AlgMLKEM512, privateKey); err != nil {
+		t.Fatalf("checkImportKeyMatch(512) error = %v", err)
+	}
+	if _, err := piv.MLKEMEncapsulationKeyFromSeed(piv.AlgMLKEM512, seed); err != nil {
+		t.Fatalf("MLKEMEncapsulationKeyFromSeed(512) error = %v", err)
 	}
 }
 

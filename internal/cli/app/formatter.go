@@ -179,6 +179,8 @@ func (f *Formatter) renderSlotTable(writer io.Writer, slots []SlotView) {
 		key := "empty"
 		if slot.KeyPresent {
 			key = slot.KeyAlgorithm
+		} else if slot.KeyUnknown {
+			key = "unknown"
 		}
 		cert := "empty"
 		if slot.CertPresent {

@@ -75,12 +75,6 @@ func (a *Adapter) ImportKey(session *adapters.Session, slot piv.Slot, algorithm 
 	if piv.IsMLDSAAlgorithm(algorithm) {
 		return fmt.Errorf("import YubiKey key into slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
 	}
-	if algorithm == piv.AlgMLKEM512 {
-		// The card accepts ML-KEM-512 seeds, but storing the imported
-		// public key object requires the encapsulation key and the
-		// standard library has no ML-KEM-512 implementation.
-		return fmt.Errorf("import YubiKey key into slot %s: unsupported algorithm 0x%02X: not supported by this release", slot, algorithm)
-	}
 	if err := a.preflightP384(session, algorithm); err != nil {
 		return fmt.Errorf("import YubiKey key into slot %s: %w", slot, err)
 	}
@@ -124,9 +118,8 @@ func (a *Adapter) preflightP384(session *adapters.Session, algorithm byte) error
 // importedPublicKey derives the public half of an imported private key for
 // storage in the slot's standard PIV object. The requested algorithm
 // supplies context for opaque and raw inputs: Ed25519/X25519 resolve a
-// 32-byte seed, while ML-KEM-768/1024 expand the 64-byte seed into the
-// encapsulation key with the standard library. ML-KEM-512 has no standard
-// library implementation and gap-rejects without an APDU.
+// 32-byte seed, while ML-KEM-512/768/1024 expand the 64-byte seed into the
+// encapsulation key (512 via circl, 768/1024 with the standard library).
 func importedPublicKey(algorithm byte, privateKey crypto.PrivateKey) (crypto.PublicKey, error) {
 	switch key := privateKey.(type) {
 	case *rsa.PrivateKey:
@@ -279,9 +272,17 @@ func (a *Adapter) DeleteKey(session *adapters.Session, slot piv.Slot) error {
 	if version, err := a.OTPStatusVersion(session); errors.Is(err, ErrPIVRestore) {
 		return fmt.Errorf("delete YubiKey key from slot %s: %w", slot, err)
 	} else if err == nil {
-		if supported, err := supportsDeleteKeyVersion(version); err == nil && !supported {
-			return fmt.Errorf("delete YubiKey key from slot %s (OTP status %s): %w", slot, version, ErrKeyDeletionUnsupported)
+		if supported, err := supportsDeleteKeyVersion(version); err == nil {
+			if !supported {
+				return fmt.Errorf("delete YubiKey key from slot %s (OTP status %s): %w", slot, version, ErrKeyDeletionUnsupported)
+			}
+		} else if !errors.Is(err, ErrCapabilityUnknown) {
+			// Unparseable version text: capability is likewise unknown, so
+			// probe the MOVE KEY command itself just like preview firmware.
 		}
+		// Preview firmware (ErrCapabilityUnknown) proceeds to probe MOVE KEY,
+		// which remains authoritative; SupportsP384 follows the same
+		// probe-on-preview pattern by returning true for 0.x.
 	}
 	if err := session.AuthenticateManagementKey(a); err != nil {
 		return fmt.Errorf("authenticate management key: %w", err)

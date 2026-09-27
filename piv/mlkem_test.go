@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"strings"
 	"testing"
+
+	"github.com/cloudflare/circl/kem/mlkem/mlkem512"
 )
 
-// TestMLKEMEncapsulationKeyFromSeed verifies seed expansion against the
-// standard library: the derived encapsulation key must encapsulate
-// ciphertexts that the seed's decapsulation key recovers. ML-KEM-512 has
-// no standard library implementation and must gap-reject.
+// TestMLKEMEncapsulationKeyFromSeed verifies seed expansion: the derived
+// encapsulation key must encapsulate ciphertexts that the seed's
+// decapsulation key recovers for 768/1024 (standard library). ML-KEM-512
+// uses circl mlkem512 and must derive an 800-byte key deterministically.
 func TestMLKEMEncapsulationKeyFromSeed(t *testing.T) {
 	seed := make([]byte, MLKEMSeedLength)
 	if _, err := rand.Read(seed); err != nil {
@@ -56,10 +58,27 @@ func TestMLKEMEncapsulationKeyFromSeed(t *testing.T) {
 		t.Fatalf("encapsulation key lengths = %d/%d, want 1184/1568", len(ek768), len(ek1024))
 	}
 
-	// ML-KEM-512 has no standard library implementation: derivation
-	// gap-rejects with a not-supported error.
-	if _, err := MLKEMEncapsulationKeyFromSeed(AlgMLKEM512, seed); err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("expected not-supported error for ML-KEM-512, got %v", err)
+	// ML-KEM-512 uses circl mlkem512: derivation must succeed with an
+	// 800-byte encapsulation key and be deterministic for the same seed.
+	ek512, err := MLKEMEncapsulationKeyFromSeed(AlgMLKEM512, seed)
+	if err != nil {
+		t.Fatalf("MLKEMEncapsulationKeyFromSeed(512) error = %v", err)
+	}
+	if len(ek512) != 800 {
+		t.Fatalf("ML-KEM-512 encapsulation key length = %d, want 800", len(ek512))
+	}
+	want512Pub, _ := mlkem512.NewKeyFromSeed(seed)
+	want512 := make([]byte, mlkem512.PublicKeySize)
+	want512Pub.Pack(want512)
+	if !bytes.Equal(ek512, want512) {
+		t.Fatal("ML-KEM-512 encapsulation key must match circl mlkem512")
+	}
+	ek512again, err := MLKEMEncapsulationKeyFromSeed(AlgMLKEM512, seed)
+	if err != nil {
+		t.Fatalf("MLKEMEncapsulationKeyFromSeed(512) error = %v", err)
+	}
+	if !bytes.Equal(ek512, ek512again) {
+		t.Fatal("ML-KEM-512 encapsulation key must be deterministic")
 	}
 
 	// Frozen wire tables: seed 64 for every variant; ciphertext
