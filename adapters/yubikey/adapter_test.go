@@ -33,7 +33,7 @@ func TestYubiKeyAdapterPINStatusFromMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if status.RetriesLeft != 2 || status.Blocked {
+	if status.RetriesLeft != 2 || status.MaxRetries != 3 || status.Blocked {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 }
@@ -70,6 +70,29 @@ func TestYubiKeyAdapterTokenLabelUsesSerialNumber(t *testing.T) {
 	}
 
 	testtrace.RequireMatchFile(t, "testdata/token_label_apdu_trace.txt", mock.APDULog())
+}
+
+func TestYubiKeyIdentityReadsSerialOnce(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetSuccessResponse(0xF8, []byte{0x01, 0x98, 0x24, 0x66})
+	session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}
+	identity, err := adapters.ReadTokenIdentityWithSession(session, NewAdapter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Label != "YubiKey PIV #26748006" || !bytes.Equal(identity.SerialNumber, []byte{0x01, 0x98, 0x24, 0x66}) {
+		t.Fatalf("unexpected identity: %+v", identity)
+	}
+	count := 0
+	for _, command := range card.TransmittedCommands {
+		if command[1] == 0xF8 {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("GET SERIAL calls = %d, want 1", count)
+	}
 }
 
 func TestYubiKeyAdapterCapabilitiesIncludeSerialNumber(t *testing.T) {
@@ -141,8 +164,7 @@ func TestYubiKeyAdapterDescribeSlotUsesMetadata(t *testing.T) {
 	certificateObject := iso7816.EncodeTLV(0x53, append(append(iso7816.EncodeTLV(0x70, certificateDER), iso7816.EncodeTLV(0x71, []byte{0x00})...), iso7816.EncodeTLV(0xFE, nil)...))
 
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
-	mock.EnqueueResponse(0xCB, certificateObject, uint16(iso7816.SwSuccess))
+	mock.SetSuccessResponse(0xCB, certificateObject)
 	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLV(piv.AlgECCP256, false, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)))
 
 	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}

@@ -1,6 +1,7 @@
 package adapters_test
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
+	"os"
 	"testing"
 	"time"
 
@@ -22,12 +24,11 @@ import (
 
 func TestDescribeSlotUsesStandardPIVObjects(t *testing.T) {
 	certificateDER := mustCreateTestCertificate(t)
-	publicKeyObject := iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy))))
-	certificateObject := iso7816.EncodeTLV(0x53, append(append(iso7816.EncodeTLV(0x70, certificateDER), iso7816.EncodeTLV(0x71, []byte{0x00})...), iso7816.EncodeTLV(0xFE, nil)...))
+	keyTemplate := iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)))
+	object := iso7816.EncodeTLV(0x53, append(keyTemplate, iso7816.EncodeTLV(0x70, certificateDER)...))
 
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, publicKeyObject, uint16(iso7816.SwSuccess))
-	mock.EnqueueResponse(0xCB, certificateObject, uint16(iso7816.SwSuccess))
+	mock.SetSuccessResponse(0xCB, object)
 
 	runtime := adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(mock)), nil)
 	description, err := adapterslots.DescribeSlot(runtime, piv.SlotAuthentication)
@@ -61,15 +62,14 @@ func TestDescribeSlotDistinguishesAbsentFromUnknownKey(t *testing.T) {
 		wantKeyPresent bool
 		wantKeyUnknown bool
 	}{
-		{name: "file not found is definitely absent", keySW: iso7816.SwFileNotFound, wantKeyPresent: false, wantKeyUnknown: false},
-		{name: "referenced data not found is definitely absent", keySW: iso7816.SwReferencedDataNotFound, wantKeyPresent: false, wantKeyUnknown: false},
+		{name: "file not found leaves private key unknown", keySW: iso7816.SwFileNotFound, wantKeyPresent: false, wantKeyUnknown: true},
+		{name: "referenced data not found leaves private key unknown", keySW: iso7816.SwReferencedDataNotFound, wantKeyPresent: false, wantKeyUnknown: true},
 		{name: "ambiguous status is unknown", keySW: iso7816.SwUnknown, wantKeyPresent: false, wantKeyUnknown: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mock := emulator.NewCard()
-			mock.EnqueueResponse(0xCB, nil, test.keySW)
-			mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
+			mock.SetResponse(0xCB, nil, test.keySW)
 
 			runtime := adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(mock)), nil)
 			description, err := adapterslots.DescribeSlot(runtime, piv.SlotAuthentication)
@@ -86,8 +86,8 @@ func TestDescribeSlotDistinguishesAbsentFromUnknownKey(t *testing.T) {
 
 // TestDescribeSlotMalformedObjectIsUnknown covers the P2 regression where a
 // 9000 response carrying a malformed object (no 0x53 tag) was treated as
-// definitely absent. Only 6A82/6A88 statuses confirm absence; structure
-// errors leave the state unknown.
+// absent. Structure errors remain errors; even 6A82/6A88 cannot prove that
+// an independently stored private key is absent.
 func TestDescribeSlotMalformedObjectIsUnknown(t *testing.T) {
 	mock := emulator.NewCard()
 	mock.SetSuccessResponse(0xCB, []byte{0x54, 0x00})
@@ -106,8 +106,7 @@ func TestDescribeSlotMalformedObjectIsUnknown(t *testing.T) {
 
 func TestDescribeSlotExposesKeyError(t *testing.T) {
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwUnknown))
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
+	mock.SetResponse(0xCB, nil, uint16(iso7816.SwUnknown))
 
 	runtime := adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(mock)), nil)
 	description, err := adapterslots.DescribeSlot(runtime, piv.SlotAuthentication)
@@ -130,8 +129,7 @@ func TestDescribeSlotExposesKeyError(t *testing.T) {
 // absent certificate.
 func TestDescribeSlotCertificateUnknownOnReadError(t *testing.T) {
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwUnknown))
+	mock.SetResponse(0xCB, nil, uint16(iso7816.SwUnknown))
 
 	runtime := adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(mock)), nil)
 	description, err := adapterslots.DescribeSlot(runtime, piv.SlotAuthentication)
@@ -147,8 +145,8 @@ func TestDescribeSlotCertificateUnknownOnReadError(t *testing.T) {
 	if description.CertError == nil {
 		t.Fatalf("ambiguous certificate read must expose CertError: %+v", description)
 	}
-	if description.KeyUnknown {
-		t.Fatalf("definitive key absence must not be unknown: %+v", description)
+	if !description.KeyUnknown {
+		t.Fatalf("same failed GET DATA leaves key state unknown: %+v", description)
 	}
 }
 
@@ -160,8 +158,7 @@ func TestDescribeSlotCertificateParseFailureKeepsDER(t *testing.T) {
 	certificateObject := iso7816.EncodeTLV(0x53, append(append(iso7816.EncodeTLV(0x70, invalidDER), iso7816.EncodeTLV(0x71, []byte{0x00})...), iso7816.EncodeTLV(0xFE, nil)...))
 
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
-	mock.EnqueueResponse(0xCB, certificateObject, uint16(iso7816.SwSuccess))
+	mock.SetSuccessResponse(0xCB, certificateObject)
 
 	runtime := adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(mock)), nil)
 	description, err := adapterslots.DescribeSlot(runtime, piv.SlotAuthentication)
@@ -195,13 +192,111 @@ func TestDescribeSlotDefinitiveNotFoundHasNoErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if description.KeyPresent || description.KeyUnknown || description.KeyError != nil {
-				t.Fatalf("definitively absent key must have no state or error: %+v", description)
+			if description.KeyPresent || !description.KeyUnknown || description.KeyError != nil || description.KeyState != adaptercore.SlotStateUnknown {
+				t.Fatalf("missing public object leaves private key unknown without error: %+v", description)
 			}
 			if description.CertPresent || description.CertUnknown || description.CertError != nil {
 				t.Fatalf("definitively absent certificate must have no state or error: %+v", description)
 			}
 		})
+	}
+}
+
+func TestDescribeSlotGeneratedPublicKeyWithoutCertificate(t *testing.T) {
+	key := &ecdsa.PublicKey{Curve: elliptic.P256(), X: elliptic.P256().Params().Gx, Y: elliptic.P256().Params().Gy}
+	writeCard := emulator.NewCard()
+	writeCard.SetSuccessResponse(0xDB, nil)
+	if err := piv.NewClient(writeCard).StoreGeneratedPublicKey(piv.SlotAuthentication, piv.AlgECCP256, key); err != nil {
+		t.Fatalf("store generated public key: %v", err)
+	}
+	if len(writeCard.TransmittedCommands) != 1 {
+		t.Fatalf("expected one PUT DATA, got %d", len(writeCard.TransmittedCommands))
+	}
+	put, err := iso7816.ParseCommand(writeCard.TransmittedCommands[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, _ := piv.ObjectIDForSlot(piv.SlotAuthentication)
+	prefix := iso7816.EncodeTLV(0x5C, iso7816.EncodeTag(tag))
+	if !bytes.HasPrefix(put.Data, prefix) {
+		t.Fatalf("unexpected PUT DATA payload: %X", put.Data)
+	}
+	readCard := emulator.NewCard()
+	readCard.SetSuccessResponse(0xCB, put.Data[len(prefix):])
+	d, err := adapterslots.DescribeSlot(adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(readCard)), nil), piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adaptercore.SlotStatePresent || d.CertState != adaptercore.SlotStateAbsent || d.CertError != nil || d.PublicKey == nil {
+		t.Fatalf("generated key without certificate: %+v", d)
+	}
+	if len(readCard.TransmittedCommands) != 1 {
+		t.Fatalf("expected one GET DATA, got %d", len(readCard.TransmittedCommands))
+	}
+}
+
+func TestDescribeSlotCertificateOnlyAndEmptyObject(t *testing.T) {
+	certDER := mustCreateTestCertificate(t)
+	for _, tc := range []struct {
+		name      string
+		object    []byte
+		keyState  adaptercore.SlotState
+		certState adaptercore.SlotState
+		publicKey bool
+	}{
+		{"certificate only", iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x70, certDER)), adaptercore.SlotStateUnknown, adaptercore.SlotStatePresent, true},
+		{"empty 53", iso7816.EncodeTLV(0x53, nil), adaptercore.SlotStateUnknown, adaptercore.SlotStateAbsent, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			card := emulator.NewCard()
+			card.SetSuccessResponse(0xCB, tc.object)
+			d, err := adapterslots.DescribeSlot(adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(card)), nil), piv.SlotAuthentication)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.KeyState != tc.keyState || d.CertState != tc.certState || (d.PublicKey != nil) != tc.publicKey {
+				t.Fatalf("unexpected slot description: %+v", d)
+			}
+			if len(card.TransmittedCommands) != 1 {
+				t.Fatalf("expected one GET DATA, got %d", len(card.TransmittedCommands))
+			}
+		})
+	}
+}
+
+func TestDescribeSlotMLDSACertificateOnly(t *testing.T) {
+	der, err := os.ReadFile("../piv/testdata/mldsa44-leaf.der")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xCB, iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x70, der)))
+	d, err := adapterslots.DescribeSlot(adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(card)), nil), piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, ok := d.PublicKey.(*piv.OpaquePublicKey)
+	if d.KeyState != adaptercore.SlotStateUnknown || d.CertState != adaptercore.SlotStatePresent || !ok || key.Algorithm != piv.AlgMLDSA44 || d.KeyAlgorithm != "mldsa44" {
+		t.Fatalf("ML-DSA certificate must expose opaque public key without proving private key: %+v", d)
+	}
+	if !bytes.Equal(d.CertDER, der) || len(card.TransmittedCommands) != 1 {
+		t.Fatalf("certificate DER or GET DATA count changed: %+v, APDUs=%d", d, len(card.TransmittedCommands))
+	}
+}
+
+func TestDescribeSlotPreservesCertificatePayloadForCompressedInfo(t *testing.T) {
+	// ParseCertificateObject historically returns tag 70 verbatim even when
+	// certificate info says compressed. Inspection keeps that same payload.
+	compressed := []byte{0x1f, 0x8b, 0x08, 0x00}
+	inner := append(iso7816.EncodeTLV(0x70, compressed), iso7816.EncodeTLV(0x71, []byte{0x01})...)
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xCB, iso7816.EncodeTLV(0x53, inner))
+	d, err := adapterslots.DescribeSlot(adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(card)), nil), piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.CertState != adaptercore.SlotStateError || !bytes.Equal(d.CertDER, compressed) {
+		t.Fatalf("compressed tag 70 must remain raw and unparsed: %+v", d)
 	}
 }
 

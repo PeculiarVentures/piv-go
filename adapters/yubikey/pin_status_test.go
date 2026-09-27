@@ -24,8 +24,8 @@ func TestYubiKeyAdapterPUKStatus6A80(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for 6A80 puk status fallback, got %v", err)
 	}
-	if status.RetriesLeft != -1 {
-		t.Fatalf("expected unknown retries (-1), got %d", status.RetriesLeft)
+	if status.RetriesLeft != -1 || status.MaxRetries != -1 {
+		t.Fatalf("expected unknown retries and limit (-1), got %+v", status)
 	}
 	if status.Type != piv.PINTypePUK {
 		t.Fatalf("expected PUK status type, got %v", status.Type)

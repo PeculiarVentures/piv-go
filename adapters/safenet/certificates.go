@@ -89,51 +89,79 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 // DescribeSlot reports the observable slot state, including SafeNet mirror
 // objects used when the standard PIV slot object is incomplete.
 func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapters.SlotDescription, error) {
-	description := adapters.SlotDescription{KeyAlgorithm: "-", CertLabel: "-"}
+	if err := requireSessionClient(session); err != nil {
+		return adapters.SlotDescription{}, err
+	}
 	session.Observe(adapters.LogLevelDebug, a, "describe-slot", "inspecting SafeNet slot %s", slot)
-
-	publicKey, keyErr := a.ReadPublicKey(session, slot)
-	switch {
-	case keyErr == nil:
-		description.KeyPresent = true
-		description.KeyAlgorithm = adapterslots.PublicKeyAlgorithmName(publicKey)
-		description.PublicKey = publicKey
-	case isKeyNotFound(keyErr):
-		// A 6A82/6A88 status definitively reports the key absent.
-	default:
-		// Absence could not be confirmed: surface unknown instead of
-		// silently reporting the key as definitely absent.
-		description.KeyPresent = false
-		description.KeyUnknown = true
-		description.KeyError = keyErr
+	standardTag, err := piv.ObjectIDForSlot(slot)
+	if err != nil {
+		return adapters.SlotDescription{}, err
 	}
-
-	certData, certErr := session.Client.ReadCertificate(slot)
-	if certErr != nil {
-		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "standard certificate unavailable for slot %s, delegating to SafeNet certificate reader", slot)
-		certData, certErr = a.ReadCertificate(session, slot)
+	standardData, standardErr := session.Client.GetData(standardTag)
+	standard := adapterslots.DescribeDataObject(standardData, standardErr)
+	mirrorTag, err := mirrorObjectTag(slot)
+	if err != nil {
+		// Slots without a SafeNet mirror still have a standard PIV view.
+		return standard, nil
 	}
-	switch {
-	case certErr == nil:
-		description.CertDER = certData
-		if cert, err := x509.ParseCertificate(certData); err == nil {
-			description.CertPresent = true
-			description.CertLabel = adapterslots.CertificateSummary(cert)
-		} else {
-			// The certificate object decoded but the payload is not an
-			// X.509 certificate: keep the raw bytes and expose the
-			// parse failure instead of reporting an absent certificate.
-			description.CertPresent = false
-			description.CertError = err
+	mirrorData, mirrorErr := session.Client.GetData(mirrorTag)
+	mirror := adapterslots.DescribeDataObject(mirrorData, mirrorErr)
+	return mergeSlotObjects(standard, mirror), nil
+}
+
+func mergeSlotObjects(standard, mirror adapters.SlotDescription) adapters.SlotDescription {
+	d := standard
+	if mirror.KeyState == adapters.SlotStatePresent && standard.KeyState != adapters.SlotStatePresent {
+		d.SetKeyState(adapters.SlotStatePresent, nil)
+		d.PublicKey = mirror.PublicKey
+		d.KeyAlgorithm = mirror.KeyAlgorithm
+	} else if standard.KeyState != adapters.SlotStatePresent {
+		state, err := mergeObjectState(standard.KeyState, standard.KeyError, mirror.KeyState, mirror.KeyError)
+		d.SetKeyState(state, err)
+	}
+	if mirror.CertState == adapters.SlotStatePresent && standard.CertState != adapters.SlotStatePresent {
+		d.CertDER = mirror.CertDER
+		d.CertLabel = mirror.CertLabel
+		d.SetCertState(adapters.SlotStatePresent, nil)
+	} else if standard.CertState != adapters.SlotStatePresent {
+		state, err := mergeObjectState(standard.CertState, standard.CertError, mirror.CertState, mirror.CertError)
+		if len(d.CertDER) == 0 {
+			d.CertDER = mirror.CertDER
 		}
-	case isKeyNotFound(certErr):
-		// A 6A82/6A88 status definitively reports the certificate absent.
-	default:
-		description.CertUnknown = true
-		description.CertError = certErr
+		d.SetCertState(state, err)
 	}
+	if d.KeyState != adapters.SlotStatePresent && d.CertState == adapters.SlotStatePresent {
+		// A certificate identifies public material but does not prove that
+		// the matching private key is available on the token.
+		if standard.KeyState == adapters.SlotStateAbsent && mirror.KeyState == adapters.SlotStateAbsent {
+			d.SetKeyState(adapters.SlotStateUnknown, nil)
+		}
+		if d.PublicKey == nil {
+			if standard.CertState == adapters.SlotStatePresent {
+				d.PublicKey = standard.PublicKey
+			} else {
+				d.PublicKey = mirror.PublicKey
+			}
+			d.KeyAlgorithm = adapterslots.PublicKeyAlgorithmName(d.PublicKey)
+		}
+	}
+	return d
+}
 
-	return description, nil
+func mergeObjectState(first adapters.SlotState, firstErr error, second adapters.SlotState, secondErr error) (adapters.SlotState, error) {
+	if first == adapters.SlotStatePresent || second == adapters.SlotStatePresent {
+		return adapters.SlotStatePresent, nil
+	}
+	if first == adapters.SlotStateError {
+		return first, firstErr
+	}
+	if second == adapters.SlotStateError {
+		return second, secondErr
+	}
+	if first == adapters.SlotStateUnknown || second == adapters.SlotStateUnknown {
+		return adapters.SlotStateUnknown, nil
+	}
+	return adapters.SlotStateAbsent, nil
 }
 
 // PutCertificate stores the certificate in the standard PIV slot object and preserves

@@ -27,31 +27,54 @@ func normalizeSafeNetTokenLabel(vendorLabel string) string {
 // or "eToken Fusion NFC PIV". This method normalizes those values to a canonical
 // label and appends the token serial number.
 func (a *Adapter) Label(session *adapters.Session) (string, error) {
-	if err := session.Client.Select(); err != nil {
-		return "", fmt.Errorf("safenet: select PIV application: %w", err)
-	}
-
-	resp, err := session.Client.Execute(&iso7816.Command{
-		Cla:  0x00,
-		Ins:  0xCB,
-		P1:   0x3F,
-		P2:   0xFF,
-		Data: []byte{0x5C, 0x03, 0x5F, 0xFF, 0x12},
-		Le:   0x05,
-	})
+	identity, err := a.Identity(session)
 	if err != nil {
-		return "", fmt.Errorf("safenet: read token label: %w", err)
+		return "", err
 	}
-	if err := resp.Err(); err != nil {
-		return "", fmt.Errorf("safenet: read token label: %w", err)
+	return identity.Label, identity.LabelError
+}
+
+// Identity returns serial and label with one serial-number query.
+func (a *Adapter) Identity(session *adapters.Session) (adapters.TokenIdentity, error) {
+	if err := requireSessionClient(session); err != nil {
+		return adapters.TokenIdentity{}, err
+	}
+	identity := adapters.TokenIdentity{}
+	vendorLabel := ""
+	if err := session.Client.Select(); err != nil {
+		identity.LabelError = fmt.Errorf("safenet: select PIV application: %w", err)
+	} else {
+		resp, err := session.Client.Execute(&iso7816.Command{
+			Cla:  0x00,
+			Ins:  0xCB,
+			P1:   0x3F,
+			P2:   0xFF,
+			Data: []byte{0x5C, 0x03, 0x5F, 0xFF, 0x12},
+			Le:   0x05,
+		})
+		if err == nil {
+			err = resp.Err()
+		}
+		if err != nil {
+			identity.LabelError = fmt.Errorf("safenet: read token label: %w", err)
+		} else {
+			vendorLabel = normalizeSafeNetTokenLabel(parseSafeNetTokenLabel(resp.Data))
+		}
 	}
 
-	vendorLabel := normalizeSafeNetTokenLabel(parseSafeNetTokenLabel(resp.Data))
 	serial, err := a.SerialNumber(session)
 	if err != nil {
-		return "", fmt.Errorf("safenet: read token label: %w", err)
+		identity.SerialError = err
+		if identity.LabelError == nil {
+			identity.LabelError = fmt.Errorf("safenet: read token label: %w", err)
+		}
+	} else {
+		identity.SerialNumber = serial
+		if identity.LabelError == nil {
+			identity.Label = fmt.Sprintf("%s #%s", vendorLabel, normalizeSafeNetByteString(serial))
+		}
 	}
-	return fmt.Sprintf("%s #%s", vendorLabel, normalizeSafeNetByteString(serial)), nil
+	return identity, nil
 }
 
 func parseSafeNetTokenLabel(data []byte) string {

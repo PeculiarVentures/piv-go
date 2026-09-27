@@ -24,13 +24,11 @@ func newSlotDescriptionSession(mock *emulator.Card) *adapters.Session {
 func TestYubiKeyAdapterDescribeSlotRetiredSlot(t *testing.T) {
 	certificateDER := mustCreateYubiKeyTestCertificate(t)
 	point := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)
-	publicKeyObject := iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point)))
-	certificateObject := iso7816.EncodeTLV(0x53, append(append(iso7816.EncodeTLV(0x70, certificateDER), iso7816.EncodeTLV(0x71, []byte{0x00})...), iso7816.EncodeTLV(0xFE, nil)...))
+	object := iso7816.EncodeTLV(0x53, append(iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point)), iso7816.EncodeTLV(0x70, certificateDER)...))
 	retiredSlot := piv.Slot(0x82)
 
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, publicKeyObject, uint16(iso7816.SwSuccess))
-	mock.EnqueueResponse(0xCB, certificateObject, uint16(iso7816.SwSuccess))
+	mock.SetSuccessResponse(0xCB, object)
 	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLV(piv.AlgECCP256, false, point))
 
 	description, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(mock), retiredSlot)
@@ -80,8 +78,8 @@ func TestYubiKeyAdapterDescribeSlotRetiredSlot(t *testing.T) {
 		}
 		seen++
 	}
-	if seen != 2 {
-		t.Fatalf("expected one key and one certificate read of 0x5FC10D, got %d", seen)
+	if seen != 1 {
+		t.Fatalf("expected one read of 0x5FC10D, got %d", seen)
 	}
 }
 
@@ -110,15 +108,13 @@ func TestYubiKeyAdapterDescribeSlotMetadataUnavailableKeepsUnknown(t *testing.T)
 
 // TestYubiKeyAdapterDescribeSlotReadsEachSourceOnce is the one-pass invariant
 // from review issue #6: a single DescribeSlot call performs exactly one GET
-// METADATA, one key object read and one certificate object read. The
-// certificate object read used to be duplicated after the metadata merge.
+// METADATA and one shared key/certificate object read.
 func TestYubiKeyAdapterDescribeSlotReadsEachSourceOnce(t *testing.T) {
 	point := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)
 	publicKeyObject := iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point)))
 
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, publicKeyObject, uint16(iso7816.SwSuccess))
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
+	mock.SetSuccessResponse(0xCB, publicKeyObject)
 	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLV(piv.AlgECCP256, false, point))
 
 	if _, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(mock), piv.SlotSignature); err != nil {
@@ -134,10 +130,61 @@ func TestYubiKeyAdapterDescribeSlotReadsEachSourceOnce(t *testing.T) {
 	if insCounts[0xF7] != 1 {
 		t.Fatalf("expected exactly one GET METADATA (0xF7), got %d: % X", insCounts[0xF7], mock.TransmittedCommands)
 	}
-	// One GET DATA for the public key and one for the certificate, both
-	// against the same slot object. A third GET DATA would be the removed
-	// duplicate certificate read.
-	if insCounts[0xCB] != 2 {
-		t.Fatalf("expected exactly two GET DATA (0xCB) reads, got %d: % X", insCounts[0xCB], mock.TransmittedCommands)
+	if insCounts[0xCB] != 1 {
+		t.Fatalf("expected exactly one GET DATA (0xCB) read, got %d: % X", insCounts[0xCB], mock.TransmittedCommands)
+	}
+}
+
+func TestYubiKeyDescribeSlotMetadataAbsenceOverridesStaleStoredKey(t *testing.T) {
+	point := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)
+	stored := iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point)))
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xCB, stored)
+	card.SetResponse(0xF7, nil, uint16(iso7816.SwReferencedDataNotFound))
+	d, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(card), piv.SlotSignature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStateAbsent || d.KeyPresent || d.PublicKey == nil {
+		t.Fatalf("metadata absence must win over stale public storage: %+v", d)
+	}
+}
+
+func TestYubiKeyDescribeSlotMetadataWithoutPublicKeyPreservesCertificateKey(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xCB, iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x70, mustCreateYubiKeyTestCertificate(t))))
+	card.SetSuccessResponse(0xF7, encodeSlotMetadataTLV(piv.AlgECCP256, false, nil))
+	d, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(card), piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStatePresent || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+		t.Fatalf("successful metadata must prove key while preserving certificate public key: %+v", d)
+	}
+}
+
+func TestYubiKeyDescribeSlotCertificateOnlyWithoutMetadataKeepsPublicKey(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xCB, iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x70, mustCreateYubiKeyTestCertificate(t))))
+	card.SetResponse(0xF7, nil, uint16(iso7816.SwInsNotSupported))
+	d, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(card), piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStateUnknown || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+		t.Fatalf("certificate provides public key but not private-key proof: %+v", d)
+	}
+}
+
+func TestYubiKeyDescribeSlotMalformedObjectStaysErrorWithoutMetadata(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xCB, []byte{0x54, 0x00})
+	card.SetResponse(0xF7, nil, uint16(iso7816.SwInsNotSupported))
+	d, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(card), piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStateError || d.CertState != adapters.SlotStateError || d.KeyError == nil || d.CertError == nil {
+		t.Fatalf("malformed object must remain an error: %+v", d)
 	}
 }

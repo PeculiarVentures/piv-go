@@ -2,6 +2,7 @@ package adapters_test
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	adaptercore "github.com/PeculiarVentures/piv-go/adapters"
@@ -21,6 +22,14 @@ func TestReadPINStatusFallsBackToClient(t *testing.T) {
 	}
 	if status.RetriesLeft != 2 {
 		t.Fatalf("unexpected status: %+v", status)
+	}
+}
+
+func TestReadManagementKeyStatusUnsupportedIsTyped(t *testing.T) {
+	runtime := adaptercore.NewRuntime(adaptercore.NewSession(piv.NewClient(emulator.NewCard())), nil)
+	_, err := adapteradmin.ReadManagementKeyStatus(runtime)
+	if !errors.Is(err, adaptercore.ErrManagementKeyStatusUnsupported) {
+		t.Fatalf("expected typed unsupported status, got %v", err)
 	}
 }
 

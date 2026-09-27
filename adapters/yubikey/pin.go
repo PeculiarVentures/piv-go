@@ -23,6 +23,7 @@ func (a *Adapter) PINStatus(session *adapters.Session, pinType piv.PINType) (ada
 		return adapters.PINStatus{
 			Type:        pinType,
 			RetriesLeft: metadata.AttemptsRemaining,
+			MaxRetries:  metadata.TotalAttempts,
 			Blocked:     metadata.AttemptsRemaining == 0,
 		}, nil
 	}
@@ -32,7 +33,7 @@ func (a *Adapter) PINStatus(session *adapters.Session, pinType piv.PINType) (ada
 	if err != nil && pinType == piv.PINTypePUK {
 		if iso7816.IsStatus(err, iso7816.SwReferencedDataNotFound) || iso7816.IsStatus(err, iso7816.SwWrongData) {
 			session.Observe(adapters.LogLevelInfo, a, "read-pin-status", "PUK metadata unavailable, reporting unknown retry count")
-			return adapters.PINStatus{Type: pinType, RetriesLeft: -1}, nil
+			return adapters.PINStatus{Type: pinType, RetriesLeft: adapters.UnknownRetries, MaxRetries: adapters.UnknownRetries}, nil
 		}
 	}
 	return status, err

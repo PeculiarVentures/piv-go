@@ -24,40 +24,28 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 	switch {
 	case metaErr == nil && metadata.PublicKey != nil:
 		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "using YubiKey metadata to mark public key presence for %s", slot)
-		description.KeyPresent = true
-		description.KeyUnknown = false
-		description.KeyError = nil
+		description.SetKeyState(adapters.SlotStatePresent, nil)
 		description.PublicKey = metadata.PublicKey
 		description.KeyAlgorithm = adapterslots.PublicKeyAlgorithmName(metadata.PublicKey)
 	case metaErr == nil:
-		// Metadata read succeeded but carries no public key: the slot is
-		// empty per metadata, so keep the standard view as-is. A standard
-		// not-found stays definitely absent; a standard unknown stays
-		// unknown. A standard present stays present.
-		if description.KeyPresent {
-			description.KeyUnknown = false
-			description.KeyError = nil
-		}
+		// A successful slot metadata response establishes a key even when
+		// this firmware omits the public-key field. Retain any public key
+		// parsed from the slot object or its certificate.
+		description.SetKeyState(adapters.SlotStatePresent, nil)
 	case isNotFound(metaErr):
-		// GET_METADATA reports the slot itself as empty (6A82/6A88),
-		// which is authoritative absence: clear any unknown carried
-		// from the standard view unless a key object was observed.
-		if !description.KeyPresent {
-			description.KeyPresent = false
-			description.KeyError = nil
-		}
-		description.KeyUnknown = false
+		// GET_METADATA reports the private-key slot itself as empty.
+		description.SetKeyState(adapters.SlotStateAbsent, nil)
 	default:
 		// Without slot metadata (for example YubiKey NEO with 6D00/6E00,
 		// or a transport failure) an empty key view is ambiguous: the
 		// certificate and the public key share one slot object, so a
 		// private key may exist while nothing is observable.
-		if description.KeyPresent {
-			description.KeyUnknown = false
-			description.KeyError = nil
-		} else {
-			description.KeyPresent = false
-			description.KeyUnknown = true
+		if description.KeyState != adapters.SlotStatePresent && description.KeyState != adapters.SlotStateError {
+			if iso7816.IsStatus(metaErr, iso7816.SwInsNotSupported) || iso7816.IsStatus(metaErr, iso7816.SwClaNotSupported) {
+				description.SetKeyState(adapters.SlotStateUnknown, nil)
+			} else {
+				description.SetKeyState(adapters.SlotStateError, metaErr)
+			}
 		}
 	}
 

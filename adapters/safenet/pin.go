@@ -67,7 +67,7 @@ func (a *Adapter) safeNetPINStatusFromQuery(client *piv.Client, pinType piv.PINT
 		return adapters.PINStatus{}, false, nil
 	}
 
-	return adapters.PINStatus{Type: pinType, RetriesLeft: retries, Blocked: retries == 0}, true, nil
+	return adapters.PINStatus{Type: pinType, RetriesLeft: retries, MaxRetries: adapters.UnknownRetries, Blocked: retries == 0}, true, nil
 }
 
 func findRecursiveTLVValue(tlvs []*iso7816.TLV, tag uint) (int, bool) {

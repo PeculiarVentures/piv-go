@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/PeculiarVentures/piv-go/piv"
@@ -8,6 +9,10 @@ import (
 
 // PINStatus aliases the standard PIV PIN status model used by adapter helpers.
 type PINStatus = piv.PINStatus
+
+// ErrManagementKeyStatusUnsupported means the selected adapter cannot report
+// management-key retry status. Callers can distinguish it from a read failure.
+var ErrManagementKeyStatusUnsupported = errors.New("adapters: management key status is not supported")
 
 const (
 	// UnknownRetries represents an unavailable retry counter value.

@@ -131,7 +131,6 @@ func TestDescribeSlotFallsBackToMirrorCertificate(t *testing.T) {
 
 	mock := emulator.NewCard()
 	mock.EnqueueResponse(0xCB, publicKeyObject, uint16(iso7816.SwSuccess))
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
 	mock.EnqueueResponse(0xCB, mirrorCertificateObject, uint16(iso7816.SwSuccess))
 
 	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "SafeNet eToken Fusion"}
@@ -144,6 +143,43 @@ func TestDescribeSlotFallsBackToMirrorCertificate(t *testing.T) {
 	}
 	if !description.CertPresent || description.CertLabel != "CN=SafeNet Slot" {
 		t.Fatalf("unexpected certificate description: %+v", description)
+	}
+}
+
+func TestDescribeSlotReadsStandardAndMirrorOnceEach(t *testing.T) {
+	certificateDER := mustCreateSafeNetTestCertificate(t)
+	standardTag, _ := piv.ObjectIDForSlot(piv.SlotAuthentication)
+	mirrorTag, _ := mirrorObjectTag(piv.SlotAuthentication)
+	standardQuery := iso7816.EncodeTLV(0x5C, iso7816.EncodeTag(standardTag))
+	mirrorQuery := iso7816.EncodeTLV(0x5C, iso7816.EncodeTag(mirrorTag))
+	reads := map[uint]int{}
+	card := emulator.NewCard()
+	card.RegisterINSHandler(0xCB, func(_ *emulator.Card, raw []byte) ([]byte, error) {
+		command, err := iso7816.ParseCommand(raw)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case bytes.Equal(command.Data, standardQuery):
+			reads[standardTag]++
+			return emulator.BuildResponse(nil, uint16(iso7816.SwFileNotFound)), nil
+		case bytes.Equal(command.Data, mirrorQuery):
+			reads[mirrorTag]++
+			return emulator.BuildSuccessResponse(buildCertificateObject(certificateDER)), nil
+		default:
+			return emulator.BuildResponse(nil, uint16(iso7816.SwReferencedDataNotFound)), nil
+		}
+	})
+	session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "SafeNet eToken Fusion"}
+	d, err := NewAdapter().DescribeSlot(session, piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStateUnknown || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+		t.Fatalf("certificate-only mirror must not prove private key: %+v", d)
+	}
+	if reads[standardTag] != 1 || reads[mirrorTag] != 1 {
+		t.Fatalf("GET DATA reads = %v, want one per physical object", reads)
 	}
 }
 
@@ -198,6 +234,58 @@ func TestSafeNetAdapterTokenLabelUsesVendorGetData(t *testing.T) {
 	}
 
 	testtrace.RequireMatchFile(t, "testdata/token_label_apdu_trace.txt", mock.APDULog())
+}
+
+func TestSafeNetIdentityReadsSerialOnce(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetSuccessResponse(0xCB, []byte("eToken Fusion NFC PIV"))
+	card.SetSuccessResponse(0xCA, []byte{0x01, 0x04, 0x08, '5', '4', '8', 'T', 'P', 'K', '7', '3'})
+	session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "SafeNet eToken Fusion"}
+	identity, err := adapters.ReadTokenIdentityWithSession(session, NewAdapter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Label != "IDPrime PIV #548TPK73" || !bytes.Equal(identity.SerialNumber, []byte("548TPK73")) {
+		t.Fatalf("unexpected identity: %+v", identity)
+	}
+	count := 0
+	for _, command := range card.TransmittedCommands {
+		if command[1] == 0xCA {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("vendor serial calls = %d, want 1", count)
+	}
+}
+
+func TestSafeNetIdentityPreservesSerialWhenLabelFails(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetResponse(0xCB, nil, uint16(iso7816.SwWrongData))
+	card.SetSuccessResponse(0xCA, []byte{0x01, 0x04, 0x08, '5', '4', '8', 'T', 'P', 'K', '7', '3'})
+	session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "SafeNet eToken Fusion"}
+	identity, err := adapters.ReadTokenIdentityWithSession(session, NewAdapter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(identity.SerialNumber, []byte("548TPK73")) || identity.SerialError != nil || identity.Label != "" || identity.LabelError == nil {
+		t.Fatalf("serial must survive label failure: %+v", identity)
+	}
+}
+
+func TestSafeNetSerialRejectsVendorSelectStatus(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetResponse(0xA4, nil, uint16(iso7816.SwFileNotFound))
+	card.SetSuccessResponse(0xCA, []byte{0x01, 0x04, 0x01, '7'})
+	session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "SafeNet eToken Fusion"}
+	if _, err := NewAdapter().SerialNumber(session); !iso7816.IsStatus(err, iso7816.SwFileNotFound) {
+		t.Fatalf("expected vendor select failure, got %v", err)
+	}
+	if len(card.TransmittedCommands) != 1 {
+		t.Fatalf("serial read must stop after failed select, got %d APDUs", len(card.TransmittedCommands))
+	}
 }
 
 func TestSafeNetAdapterTokenLabelParsesNestedVendorResponse(t *testing.T) {

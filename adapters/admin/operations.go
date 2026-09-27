@@ -44,7 +44,7 @@ func readManagementKeyStatus(session *adapters.Session, adapter adapters.Adapter
 		session.Observe(adapters.LogLevelDebug, adapter, "read-management-key-status", "using adapter-specific MGM status handling")
 		return statusAdapter.ManagementKeyStatus(session)
 	}
-	return adapters.ManagementKeyStatus{}, fmt.Errorf("adapters: management key status is not supported")
+	return adapters.ManagementKeyStatus{}, adapters.ErrManagementKeyStatusUnsupported
 }
 
 // ChangePIN resolves token-specific PIN rotation with a standard fallback.

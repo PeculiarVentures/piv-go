@@ -17,7 +17,7 @@ func TestClientPINStatusReportsRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if status.RetriesLeft != 3 || status.Blocked || status.Verified {
+	if status.RetriesLeft != 3 || status.MaxRetries != -1 || status.Blocked || status.Verified {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 	if got := mock.TransmittedCommands[0]; !bytes.Equal(got, []byte{0x00, 0x20, 0x00, 0x80}) {
@@ -33,7 +33,19 @@ func TestClientPINStatusReportsBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !status.Blocked || status.RetriesLeft != 0 {
+	if !status.Blocked || status.RetriesLeft != 0 || status.MaxRetries != -1 {
+		t.Fatalf("unexpected status: %+v", status)
+	}
+}
+
+func TestClientPINStatus63C0IsBlocked(t *testing.T) {
+	mock := emulator.NewCard()
+	mock.SetResponse(0x20, nil, 0x63C0)
+	status, err := NewClient(mock).PINStatus(PINTypeCard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !status.Blocked || status.RetriesLeft != 0 || status.MaxRetries != -1 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 }
