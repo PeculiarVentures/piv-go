@@ -93,9 +93,19 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 	session.Observe(adapters.LogLevelDebug, a, "describe-slot", "inspecting SafeNet slot %s", slot)
 
 	publicKey, keyErr := a.ReadPublicKey(session, slot)
-	if keyErr == nil {
+	switch {
+	case keyErr == nil:
 		description.KeyPresent = true
 		description.KeyAlgorithm = adapterslots.PublicKeyAlgorithmName(publicKey)
+		description.PublicKey = publicKey
+	case isKeyNotFound(keyErr):
+		// A 6A82/6A88 status definitively reports the key absent.
+	default:
+		// Absence could not be confirmed: surface unknown instead of
+		// silently reporting the key as definitely absent.
+		description.KeyPresent = false
+		description.KeyUnknown = true
+		description.KeyError = keyErr
 	}
 
 	certData, certErr := session.Client.ReadCertificate(slot)
@@ -103,11 +113,24 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "standard certificate unavailable for slot %s, delegating to SafeNet certificate reader", slot)
 		certData, certErr = a.ReadCertificate(session, slot)
 	}
-	if certErr == nil {
+	switch {
+	case certErr == nil:
+		description.CertDER = certData
 		if cert, err := x509.ParseCertificate(certData); err == nil {
 			description.CertPresent = true
 			description.CertLabel = adapterslots.CertificateSummary(cert)
+		} else {
+			// The certificate object decoded but the payload is not an
+			// X.509 certificate: keep the raw bytes and expose the
+			// parse failure instead of reporting an absent certificate.
+			description.CertPresent = false
+			description.CertError = err
 		}
+	case isKeyNotFound(certErr):
+		// A 6A82/6A88 status definitively reports the certificate absent.
+	default:
+		description.CertUnknown = true
+		description.CertError = certErr
 	}
 
 	return description, nil
@@ -231,4 +254,14 @@ func buildCertificateObject(certData []byte) []byte {
 	certObj = append(certObj, iso7816.EncodeTLV(0x71, []byte{0x00})...)
 	certObj = append(certObj, iso7816.EncodeTLV(0xFE, nil)...)
 	return iso7816.EncodeTLV(0x53, certObj)
+}
+
+// isKeyNotFound reports whether a public-key read failure definitively means
+// the key is absent: only a 6A82/6A88 status (unwrapped through the SafeNet
+// reader). Object structure errors leave the state unknown.
+func isKeyNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return iso7816.IsStatus(err, iso7816.SwFileNotFound) || iso7816.IsStatus(err, iso7816.SwReferencedDataNotFound)
 }

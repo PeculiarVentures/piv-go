@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
+	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
 
@@ -93,21 +94,58 @@ func describeStandardSlot(session *adapters.Session, slot piv.Slot) (adapters.Sl
 	description := adapters.SlotDescription{KeyAlgorithm: "-", CertLabel: "-"}
 
 	publicKey, keyErr := session.Client.ReadPublicKey(slot)
-	if keyErr == nil {
+	switch {
+	case keyErr == nil:
 		description.KeyPresent = true
 		description.KeyAlgorithm = PublicKeyAlgorithmName(publicKey)
+		description.PublicKey = publicKey
+	case isKeyNotFound(keyErr):
+		// A 6A82/6A88 status definitively reports the key absent.
+	default:
+		// The key read failed without a definitive not-found status, so
+		// absence cannot be confirmed. Surface unknown instead of absent
+		// and keep the error for callers.
+		description.KeyPresent = false
+		description.KeyUnknown = true
+		description.KeyError = keyErr
 	}
 
 	certData, certErr := session.Client.ReadCertificate(slot)
-	if certErr == nil {
+	switch {
+	case certErr == nil:
+		description.CertDER = certData
 		cert, err := x509.ParseCertificate(certData)
 		if err == nil {
 			description.CertPresent = true
 			description.CertLabel = CertificateSummary(cert)
+		} else {
+			// The slot object decoded but its payload is not an X.509
+			// certificate: keep the raw certificate bytes and expose the
+			// parse failure instead of reporting an absent certificate.
+			description.CertPresent = false
+			description.CertError = err
 		}
+	case isKeyNotFound(certErr):
+		// A 6A82/6A88 status definitively reports the certificate absent.
+	default:
+		description.CertUnknown = true
+		description.CertError = certErr
 	}
 
 	return description, nil
+}
+
+// isKeyNotFound reports whether an object read failure definitively means
+// the object is absent: only a 6A82/6A88 status. Object structure errors
+// (for example a 9000 response carrying a malformed object without tag
+// 0x53) leave the state unknown: the card answered, but the content cannot
+// be interpreted as either present or absent. It is used for both the key
+// and the certificate object reads.
+func isKeyNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return iso7816.IsStatus(err, iso7816.SwFileNotFound) || iso7816.IsStatus(err, iso7816.SwReferencedDataNotFound)
 }
 
 func requireSessionClient(session *adapters.Session) error {

@@ -24,6 +24,13 @@ func (a *Adapter) KeyMetadata(session *adapters.Session, slot piv.Slot) (adapter
 		}, nil
 	}
 
+	return keyMetadataForSlot(slot, metadata), nil
+}
+
+// keyMetadataForSlot normalizes raw YubiKey slot metadata into the adapter
+// metadata model. It is shared by Adapter.KeyMetadata and Adapter.DescribeSlot
+// so both expose identical vendor fields and policies.
+func keyMetadataForSlot(slot piv.Slot, metadata yubiKeySlotMetadata) adapters.KeyMetadata {
 	vendorFields := map[string][]byte{
 		"yubikey/algorithm-raw":    {metadata.Algorithm},
 		"yubikey/pin-policy-raw":   {metadata.PINPolicy},
@@ -42,7 +49,7 @@ func (a *Adapter) KeyMetadata(session *adapters.Session, slot piv.Slot) (adapter
 		TouchPolicy:  normalizeYubiKeyTouchPolicy(metadata.TouchPolicy),
 		Source:       adapters.ResolutionSourceVendorMetadata,
 		VendorFields: vendorFields,
-	}, nil
+	}
 }
 
 func normalizeYubiKeyPINPolicy(value byte) adapters.PINPolicy {
