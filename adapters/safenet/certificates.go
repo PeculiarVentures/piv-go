@@ -130,12 +130,12 @@ func mergeSlotObjects(standard, mirror adapters.SlotDescription) adapters.SlotDe
 		}
 		d.SetCertState(state, err)
 	}
+	if d.KeyState == adapters.SlotStateUnknown && d.KeyError == nil {
+		d.KeyUnknownReason = adapters.KeyUnknownReasonUnobservable
+	}
 	if d.KeyState != adapters.SlotStatePresent && d.CertState == adapters.SlotStatePresent {
 		// A certificate identifies public material but does not prove that
 		// the matching private key is available on the token.
-		if standard.KeyState == adapters.SlotStateAbsent && mirror.KeyState == adapters.SlotStateAbsent {
-			d.SetKeyState(adapters.SlotStateUnknown, nil)
-		}
 		if d.PublicKey == nil {
 			if standard.CertState == adapters.SlotStatePresent {
 				d.PublicKey = standard.PublicKey

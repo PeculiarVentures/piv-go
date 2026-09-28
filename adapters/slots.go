@@ -24,9 +24,23 @@ const (
 	SlotStateError   SlotState = "error"
 )
 
+// KeyUnknownReason explains a private-key state that cannot be established
+// through passive inspection. An empty reason means the key state is known or
+// the read failed; failures are reported by SlotStateError and KeyError.
+type KeyUnknownReason string
+
+const (
+	// KeyUnknownReasonUnobservable means the available public objects and
+	// metadata cannot establish whether a private key occupies the slot.
+	KeyUnknownReasonUnobservable KeyUnknownReason = "unobservable"
+)
+
 type SlotDescription struct {
 	KeyState   SlotState
 	KeyPresent bool
+	// KeyUnknownReason describes a successful but private-key-blind read.
+	// It is empty for known states and read or parse errors.
+	KeyUnknownReason KeyUnknownReason
 	// KeyUnknown reports that private-key absence could not be confirmed.
 	// GET DATA not-found and empty objects are unknown without authoritative
 	// vendor metadata, as are ambiguous read failures.
@@ -62,6 +76,7 @@ func (d *SlotDescription) SetKeyState(state SlotState, err error) {
 	d.KeyPresent = state == SlotStatePresent
 	d.KeyUnknown = state == SlotStateUnknown || state == SlotStateError
 	d.KeyError = err
+	d.KeyUnknownReason = ""
 }
 
 // SetCertState updates the typed state and its legacy flags together.

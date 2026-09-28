@@ -116,8 +116,8 @@ func TestDescribeSlotExposesKeyError(t *testing.T) {
 	if description.KeyPresent || !description.KeyUnknown {
 		t.Fatalf("ambiguous key read must stay unknown: %+v", description)
 	}
-	if description.KeyError == nil {
-		t.Fatalf("ambiguous key read must expose KeyError: %+v", description)
+	if description.KeyError == nil || description.KeyUnknownReason != "" {
+		t.Fatalf("ambiguous key read must expose KeyError without an observability reason: %+v", description)
 	}
 	if description.PublicKey != nil {
 		t.Fatalf("ambiguous key read must not expose a public key: %+v", description)
@@ -192,7 +192,7 @@ func TestDescribeSlotDefinitiveNotFoundHasNoErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if description.KeyPresent || !description.KeyUnknown || description.KeyError != nil || description.KeyState != adaptercore.SlotStateUnknown {
+			if description.KeyPresent || !description.KeyUnknown || description.KeyError != nil || description.KeyState != adaptercore.SlotStateUnknown || description.KeyUnknownReason != adaptercore.KeyUnknownReasonUnobservable {
 				t.Fatalf("missing public object leaves private key unknown without error: %+v", description)
 			}
 			if description.CertPresent || description.CertUnknown || description.CertError != nil {
@@ -254,7 +254,7 @@ func TestDescribeSlotCertificateOnlyAndEmptyObject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if d.KeyState != tc.keyState || d.CertState != tc.certState || (d.PublicKey != nil) != tc.publicKey {
+			if d.KeyState != tc.keyState || d.CertState != tc.certState || (d.PublicKey != nil) != tc.publicKey || d.KeyUnknownReason != adaptercore.KeyUnknownReasonUnobservable {
 				t.Fatalf("unexpected slot description: %+v", d)
 			}
 			if len(card.TransmittedCommands) != 1 {

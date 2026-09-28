@@ -1,6 +1,7 @@
 package safenet
 
 import (
+	"bytes"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -102,6 +103,77 @@ func TestInitializeTokenWithEmulatorSessionProducesTraceAlignedAPDULog(t *testin
 	}
 	if expiry := readCHUIDExpiry(t, value); expiry != "20360401" {
 		t.Fatalf("unexpected CHUID expiry: %s", expiry)
+	}
+}
+
+// Identity-only provisioning is the safe recovery path when passive reads
+// cannot prove whether an older SafeNet token has hidden private keys. It must
+// never clear generation, mirror, or standard PIV storage.
+func TestInitializeTokenIdentityOnlyPreservesExistingContainers(t *testing.T) {
+	card := NewInitializationEmulatorCard()
+	client := piv.NewClient(card)
+	standardTag, err := piv.ObjectIDForSlot(piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := map[uint][]byte{
+		safeNetGenerationTagsBySlot[piv.SlotAuthentication]: iso7816.EncodeTLV(0x7F48, []byte{0xAA, 0x55}),
+		safeNetMirrorTagsBySlot[piv.SlotAuthentication]:     iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x72, []byte{0x11})),
+		standardTag: iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, []byte{0x42})),
+	}
+	for tag, value := range objects {
+		if err := client.PutData(tag, value); err != nil {
+			t.Fatalf("seed object %06X: %v", tag, err)
+		}
+	}
+	session := &adapters.Session{Client: client, ReaderName: "SafeNet eToken Fusion"}
+	if _, err := NewAdapter().CHUID(session); !iso7816.IsStatus(err, iso7816.SwFileNotFound) {
+		t.Fatalf("clean-card CHUID probe = %v, want definitive not-found", err)
+	}
+	cardAuth, err := NewAdapter().DescribeSlot(session, piv.SlotCardAuth)
+	if err != nil || cardAuth.KeyState != adapters.SlotStateUnknown || cardAuth.CertState != adapters.SlotStateAbsent {
+		t.Fatalf("clean-card card-auth probe = %+v, %v; want unobservable key and absent certificate", cardAuth, err)
+	}
+	initialCommands := len(card.TransmittedCommands)
+	result, err := NewAdapter().InitializeToken(session, adapters.InitializeTokenParams{
+		ClearContainers: false, ProvisionIdentity: true,
+		InitializedAt: time.Date(2026, time.April, 1, 11, 50, 43, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("identity-only initialization: %v", err)
+	}
+	if !result.ManagementAuthenticated || len(result.ContainersCleared) != 0 {
+		t.Fatalf("identity-only result cleared containers: %+v", result)
+	}
+	for _, step := range result.Steps {
+		if step == "clear-containers" {
+			t.Fatalf("identity-only flow ran container cleanup: %+v", result.Steps)
+		}
+	}
+	for _, raw := range card.TransmittedCommands[initialCommands:] {
+		if !isPutDataCommand(raw) {
+			continue
+		}
+		tag, _, err := decodeSafeNetPutDataCommand(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tag != safeNetCHUIDAlias {
+			t.Fatalf("identity-only flow wrote object %06X, want only CHUID alias", tag)
+		}
+	}
+	for tag, want := range objects {
+		got, err := client.GetData(tag)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("object %06X changed: got %X, want %X, error %v", tag, got, want, err)
+		}
+	}
+	chuid, err := NewAdapter().CHUID(session)
+	if err != nil || len(chuid) == 0 {
+		t.Fatalf("provisioned CHUID unavailable: %X, %v", chuid, err)
+	}
+	if expiry := readCHUIDExpiry(t, chuid); expiry != "20360401" {
+		t.Fatalf("CHUID expiry = %q, want 20360401", expiry)
 	}
 }
 

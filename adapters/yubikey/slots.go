@@ -1,6 +1,8 @@
 package yubikey
 
 import (
+	"errors"
+
 	"github.com/PeculiarVentures/piv-go/adapters"
 	adapterslots "github.com/PeculiarVentures/piv-go/adapters/slots"
 	"github.com/PeculiarVentures/piv-go/iso7816"
@@ -20,7 +22,7 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 
 	session.Observe(adapters.LogLevelDebug, a, "describe-slot", "reading YubiKey slot metadata for %s", slot)
 	metadata, metaErr := readSlotMetadata(session.Client, slot)
-	metadataUnavailable := metaErr != nil && !isNotFound(metaErr)
+	metadataUnsupported := iso7816.IsStatus(metaErr, iso7816.SwInsNotSupported) || iso7816.IsStatus(metaErr, iso7816.SwClaNotSupported)
 	switch {
 	case metaErr == nil && metadata.PublicKey != nil:
 		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "using YubiKey metadata to mark public key presence for %s", slot)
@@ -36,16 +38,18 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 		// GET_METADATA reports the private-key slot itself as empty.
 		description.SetKeyState(adapters.SlotStateAbsent, nil)
 	default:
-		// Without slot metadata (for example YubiKey NEO with 6D00/6E00,
-		// or a transport failure) an empty key view is ambiguous: the
-		// certificate and the public key share one slot object, so a
-		// private key may exist while nothing is observable.
-		if description.KeyState != adapters.SlotStatePresent && description.KeyState != adapters.SlotStateError {
-			if iso7816.IsStatus(metaErr, iso7816.SwInsNotSupported) || iso7816.IsStatus(metaErr, iso7816.SwClaNotSupported) {
-				description.SetKeyState(adapters.SlotStateUnknown, nil)
-			} else {
-				description.SetKeyState(adapters.SlotStateError, metaErr)
+		if metadataUnsupported {
+			// NEO cannot report private-key metadata. A readable public
+			// object remains useful evidence; otherwise the private key is
+			// permanently unobservable through this passive read.
+			if description.KeyState == adapters.SlotStateUnknown {
+				description.KeyUnknownReason = adapters.KeyUnknownReasonUnobservable
 			}
+		} else {
+			// A transient GET METADATA failure prevents proof of private-key
+			// presence even if 7F49 supplied a valid public key. Keep that
+			// public key and any independent certificate observation.
+			description.SetKeyState(adapters.SlotStateError, errors.Join(description.KeyError, metaErr))
 		}
 	}
 
@@ -58,7 +62,7 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 	// ambiguous: the certificate and the public key share one slot object,
 	// so a private key may exist while nothing is observable. Surface the
 	// guidance in the operation trace where blind-slot diagnosis happens.
-	if metadataUnavailable && !description.KeyPresent {
+	if metadataUnsupported && !description.KeyPresent {
 		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "NEO shares certificate and public-key object without GET METADATA; re-import key or certificate to restore view for %s", slot)
 	}
 
@@ -67,8 +71,8 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 
 // isNotFound reports a definitive empty-slot status from GET_METADATA:
 // 6A82 (file not found) or 6A88 (referenced data not found, the empty-slot
-// signal used by yubikit _list_keys). All other errors leave the state
-// unknown.
+// signal used by yubikit _list_keys). Unsupported metadata permits a
+// public-object fallback; other failures are exposed as SlotStateError.
 func isNotFound(err error) bool {
 	return iso7816.IsStatus(err, iso7816.SwFileNotFound) ||
 		iso7816.IsStatus(err, iso7816.SwReferencedDataNotFound)

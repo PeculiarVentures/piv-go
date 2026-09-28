@@ -175,11 +175,44 @@ func TestDescribeSlotReadsStandardAndMirrorOnceEach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStateUnknown || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+	if d.KeyState != adapters.SlotStateUnknown || d.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
 		t.Fatalf("certificate-only mirror must not prove private key: %+v", d)
 	}
 	if reads[standardTag] != 1 || reads[mirrorTag] != 1 {
 		t.Fatalf("GET DATA reads = %v, want one per physical object", reads)
+	}
+}
+
+// Public storage absence leaves private-key presence unobservable, while an
+// APDU failure remains an error rather than a permanent capability limitation.
+func TestDescribeSlotDistinguishesBlindSlotsFromReadErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		standardSW    uint16
+		wantKeyState  adapters.SlotState
+		wantCertState adapters.SlotState
+		wantReason    adapters.KeyUnknownReason
+		wantError     bool
+	}{
+		{"both objects absent", uint16(iso7816.SwFileNotFound), adapters.SlotStateUnknown, adapters.SlotStateAbsent, adapters.KeyUnknownReasonUnobservable, false},
+		{"standard read fails", uint16(iso7816.SwUnknown), adapters.SlotStateError, adapters.SlotStateError, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			card := emulator.NewCard()
+			card.EnqueueResponse(0xCB, nil, tc.standardSW)
+			card.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
+			session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "SafeNet eToken Fusion"}
+			d, err := NewAdapter().DescribeSlot(session, piv.SlotAuthentication)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.KeyState != tc.wantKeyState || d.CertState != tc.wantCertState || d.KeyUnknownReason != tc.wantReason || (d.KeyError != nil) != tc.wantError {
+				t.Fatalf("slot description = %+v, want key=%s cert=%s reason=%s error=%v", d, tc.wantKeyState, tc.wantCertState, tc.wantReason, tc.wantError)
+			}
+			if len(card.TransmittedCommands) != 2 {
+				t.Fatalf("GET DATA count = %d, want one standard and one mirror read", len(card.TransmittedCommands))
+			}
+		})
 	}
 }
 

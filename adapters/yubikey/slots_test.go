@@ -83,6 +83,42 @@ func TestYubiKeyAdapterDescribeSlotRetiredSlot(t *testing.T) {
 	}
 }
 
+// A readable 7F49 is public material, but a transient metadata failure
+// cannot prove private-key presence. Firmware without GET METADATA retains
+// the established public-object fallback instead of reporting a read error.
+func TestYubiKeyDescribeSlotPublicObjectWithMetadataFailure(t *testing.T) {
+	point := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)
+	stored := iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point)))
+	for _, tc := range []struct {
+		name       string
+		metadataSW uint16
+		wantState  adapters.SlotState
+		wantError  bool
+	}{
+		{"transient security failure", uint16(iso7816.SwSecurityNotSatisfied), adapters.SlotStateError, true},
+		{"NEO unsupported metadata", uint16(iso7816.SwInsNotSupported), adapters.SlotStatePresent, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			card := emulator.NewCard()
+			card.SetSuccessResponse(0xCB, stored)
+			card.SetResponse(0xF7, nil, tc.metadataSW)
+			d, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(card), piv.SlotAuthentication)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.KeyState != tc.wantState || (d.KeyError != nil) != tc.wantError || d.KeyUnknownReason != "" || d.PublicKey == nil || d.CertState != adapters.SlotStateAbsent {
+				t.Fatalf("slot description = %+v, want key=%s error=%v and retained public object", d, tc.wantState, tc.wantError)
+			}
+			if tc.wantError && !iso7816.IsStatus(d.KeyError, tc.metadataSW) {
+				t.Fatalf("KeyError = %v, want metadata status %04X", d.KeyError, tc.metadataSW)
+			}
+			if len(card.TransmittedCommands) != 2 {
+				t.Fatalf("APDU count = %d, want one GET DATA and one GET METADATA", len(card.TransmittedCommands))
+			}
+		})
+	}
+}
+
 // TestYubiKeyAdapterDescribeSlotMetadataUnavailableKeepsUnknown covers a
 // metadata-less token such as the YubiKey NEO (GET METADATA 6D00) with an
 // empty standard view: the key state must stay unknown.
@@ -98,8 +134,8 @@ func TestYubiKeyAdapterDescribeSlotMetadataUnavailableKeepsUnknown(t *testing.T)
 	if description.KeyPresent {
 		t.Fatalf("empty slot must not report a key: %+v", description)
 	}
-	if !description.KeyUnknown {
-		t.Fatalf("metadata-less token with an empty view must stay unknown: %+v", description)
+	if !description.KeyUnknown || description.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || description.KeyError != nil {
+		t.Fatalf("metadata-less token with an empty view must be unobservable without a read error: %+v", description)
 	}
 	if description.Metadata != nil {
 		t.Fatalf("unavailable metadata must not be exposed: %+v", description)
@@ -145,7 +181,7 @@ func TestYubiKeyDescribeSlotMetadataAbsenceOverridesStaleStoredKey(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStateAbsent || d.KeyPresent || d.PublicKey == nil {
+	if d.KeyState != adapters.SlotStateAbsent || d.KeyPresent || d.PublicKey == nil || d.KeyUnknownReason != "" {
 		t.Fatalf("metadata absence must win over stale public storage: %+v", d)
 	}
 }
@@ -171,7 +207,7 @@ func TestYubiKeyDescribeSlotCertificateOnlyWithoutMetadataKeepsPublicKey(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStateUnknown || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+	if d.KeyState != adapters.SlotStateUnknown || d.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
 		t.Fatalf("certificate provides public key but not private-key proof: %+v", d)
 	}
 }
@@ -184,7 +220,7 @@ func TestYubiKeyDescribeSlotMalformedObjectStaysErrorWithoutMetadata(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStateError || d.CertState != adapters.SlotStateError || d.KeyError == nil || d.CertError == nil {
+	if d.KeyState != adapters.SlotStateError || d.CertState != adapters.SlotStateError || d.KeyError == nil || d.CertError == nil || d.KeyUnknownReason != "" {
 		t.Fatalf("malformed object must remain an error: %+v", d)
 	}
 }

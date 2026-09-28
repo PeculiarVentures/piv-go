@@ -96,9 +96,8 @@ func (s *safeNetInitializationEmulator) handleGetData(_ *emulator.Card, command 
 	if value, ok := s.objects[tag]; ok {
 		return emulator.BuildSuccessResponse(value), nil
 	}
-	if tag == safeNetCHUIDAlias || tag == safeNetCardAuthMirrorTag {
-		return emulator.BuildResponse(nil, uint16(iso7816.SwWrongData)), nil
-	}
+	// The clean-card fixture reports definitive object absence for every
+	// missing data object. WrongData cannot prove that an object is absent.
 	return emulator.BuildResponse(nil, uint16(iso7816.SwFileNotFound)), nil
 }
 

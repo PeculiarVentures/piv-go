@@ -107,6 +107,7 @@ func DescribeDataObject(data []byte, readErr error) adapters.SlotDescription {
 			// GET DATA reports public object storage, not the private-key
 			// slot. A missing object cannot prove that the key is absent.
 			d.SetKeyState(adapters.SlotStateUnknown, nil)
+			d.KeyUnknownReason = adapters.KeyUnknownReasonUnobservable
 			d.SetCertState(adapters.SlotStateAbsent, nil)
 		} else {
 			d.SetKeyState(adapters.SlotStateError, readErr)
@@ -142,6 +143,7 @@ func DescribeDataObject(data []byte, readErr error) adapters.SlotDescription {
 					// Even an empty 53 proves only that public storage is
 					// empty. A private key may still occupy the slot.
 					d.SetKeyState(adapters.SlotStateUnknown, nil)
+					d.KeyUnknownReason = adapters.KeyUnknownReasonUnobservable
 				} else {
 					key, keyErr := piv.ParsePublicKeyObject(data)
 					if keyErr != nil {
