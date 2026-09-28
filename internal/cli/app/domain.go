@@ -39,6 +39,16 @@ func clearCertificate(runtime *adapters.Runtime, slot piv.Slot) error {
 }
 
 func generateKeyPair(runtime *adapters.Runtime, slot piv.Slot, algorithm byte) (crypto.PublicKey, error) {
+	return generateKeyPairWithPolicies(runtime, slot, algorithm, piv.PinPolicyDefault, piv.TouchPolicyDefault)
+}
+
+func generateKeyPairWithPolicies(runtime *adapters.Runtime, slot piv.Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error) {
+	if generator, ok := runtime.Adapter.(adapters.KeyGenerationPolicyAdapter); ok {
+		return generator.GenerateKey(runtime.Session, slot, algorithm, pinPolicy, touchPolicy)
+	}
+	if pinPolicy != piv.PinPolicyDefault || touchPolicy != piv.TouchPolicyDefault {
+		return nil, UnsupportedError("PIN/touch policies are not supported on the selected token", "use default policies or select a YubiKey token")
+	}
 	if generator, ok := runtime.Adapter.(adapters.KeyGenerationAdapter); ok {
 		if err := generator.PrepareGenerateKey(runtime.Session, slot, algorithm); err != nil {
 			return nil, err
@@ -56,11 +66,39 @@ func generateKeyPair(runtime *adapters.Runtime, slot piv.Slot, algorithm byte) (
 	return publicKey, nil
 }
 
+func importKeyPair(runtime *adapters.Runtime, slot piv.Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error {
+	if importer, ok := runtime.Adapter.(adapters.KeyImportAdapter); ok {
+		return importer.ImportKey(runtime.Session, slot, algorithm, privateKey, pinPolicy, touchPolicy)
+	}
+	return runtime.Session.Client.ImportKey(slot, algorithm, privateKey, pinPolicy, touchPolicy)
+}
+
+// kemDecapsulator is implemented by adapters that decapsulate ML-KEM
+// ciphertexts with vendor-specific observability around the standard PIV
+// decapsulation flow (for example the YubiKey adapter).
+type kemDecapsulator interface {
+	Decapsulate(session *adapters.Session, slot piv.Slot, algorithm byte, ciphertext []byte) ([]byte, error)
+}
+
+func decapsulateSecret(runtime *adapters.Runtime, algorithm byte, slot piv.Slot, ciphertext []byte) ([]byte, error) {
+	if decapsulator, ok := runtime.Adapter.(kemDecapsulator); ok {
+		return decapsulator.Decapsulate(runtime.Session, slot, algorithm, ciphertext)
+	}
+	return runtime.Session.Client.Decapsulate(algorithm, slot, ciphertext)
+}
+
 func deleteKeyPair(runtime *adapters.Runtime, slot piv.Slot) error {
 	if deleter, ok := runtime.Adapter.(adapters.KeyDeletionAdapter); ok {
 		return deleter.DeleteKey(runtime.Session, slot)
 	}
 	return UnsupportedError("key deletion is not supported on the selected token", "inspect capabilities with piv info")
+}
+
+func attestKey(runtime *adapters.Runtime, slot piv.Slot) ([]byte, error) {
+	if attester, ok := runtime.Adapter.(adapters.KeyAttestationAdapter); ok {
+		return attester.AttestKey(runtime.Session, slot)
+	}
+	return nil, UnsupportedError("key attestation is not supported on the selected token", "inspect capabilities with piv info")
 }
 
 func describeSlot(runtime *adapters.Runtime, slot piv.Slot) (SlotView, error) {
@@ -72,6 +110,7 @@ func describeSlot(runtime *adapters.Runtime, slot piv.Slot) (SlotView, error) {
 		Name:         SlotName(slot),
 		Hex:          SlotHex(slot),
 		KeyPresent:   description.KeyPresent,
+		KeyUnknown:   description.KeyUnknown,
 		KeyAlgorithm: description.KeyAlgorithm,
 		CertPresent:  description.CertPresent,
 		CertLabel:    description.CertLabel,

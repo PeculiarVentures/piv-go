@@ -53,11 +53,11 @@ func (c *cli) newSlotCommand() *cobra.Command {
 		Short: "Show one slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlot(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.info.SlotShow(ctx, app.SlotRequest{Global: global, Slot: slot})
 			})
 		},

@@ -9,7 +9,11 @@ import (
 
 // SerialNumber returns the vendor-specific hardware serial number for SafeNet.
 func (a *Adapter) SerialNumber(session *adapters.Session) ([]byte, error) {
-	if _, err := session.Client.Execute(&iso7816.Command{Cla: 0x02, Ins: 0xA4, P1: 0x04, P2: 0x00, Le: -1}); err != nil {
+	selectResponse, err := session.Client.Execute(&iso7816.Command{Cla: 0x02, Ins: 0xA4, P1: 0x04, P2: 0x00, Le: -1})
+	if err != nil {
+		return nil, fmt.Errorf("safenet: select vendor application: %w", err)
+	}
+	if err := selectResponse.Err(); err != nil {
 		return nil, fmt.Errorf("safenet: select vendor application: %w", err)
 	}
 

@@ -162,6 +162,46 @@ func generateAsymmetricKeyPairCommand(slot Slot, alg byte) *iso7816.Command {
 	}
 }
 
+// generateAsymmetricKeyPairWithPoliciesCommand returns a GENERATE ASYMMETRIC
+// KEY PAIR command carrying YubiKey PIN/touch policy extensions. Policy value
+// 0x00 (default) omits the corresponding tag, in which case the device applies
+// its own default policy instead of preserving the slot's previous policy;
+// values above 0x03 are rejected as unsupported by this transport.
+func generateAsymmetricKeyPairWithPoliciesCommand(slot Slot, alg byte, pinPolicy byte, touchPolicy byte) (*iso7816.Command, error) {
+	if err := checkPolicyValue("PIN policy", pinPolicy); err != nil {
+		return nil, err
+	}
+	if err := checkPolicyValue("touch policy", touchPolicy); err != nil {
+		return nil, err
+	}
+	controlReference := iso7816.EncodeTLV(0x80, []byte{alg})
+	if pinPolicy != PinPolicyDefault {
+		controlReference = append(controlReference, iso7816.EncodeTLV(TagPinPolicy, []byte{pinPolicy})...)
+	}
+	if touchPolicy != TouchPolicyDefault {
+		controlReference = append(controlReference, iso7816.EncodeTLV(TagTouchPolicy, []byte{touchPolicy})...)
+	}
+	data := iso7816.EncodeTLV(0xAC, controlReference)
+
+	return &iso7816.Command{
+		Cla:  0x00,
+		Ins:  0x47, // GENERATE ASYMMETRIC KEY PAIR
+		P1:   0x00,
+		P2:   byte(slot),
+		Data: data,
+		Le:   256,
+	}, nil
+}
+
+// checkPolicyValue rejects YubiKey PIN/touch policy values outside the
+// 0x00-0x03 range supported by this transport.
+func checkPolicyValue(name string, value byte) error {
+	if value > 0x03 {
+		return fmt.Errorf("piv: unsupported %s 0x%02X", name, value)
+	}
+	return nil
+}
+
 // padPIN pads the PIN to 8 bytes with 0xFF as required by PIV.
 func padPIN(pin string) []byte {
 	padded := make([]byte, 8)

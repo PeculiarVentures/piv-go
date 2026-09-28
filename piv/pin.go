@@ -19,13 +19,16 @@ const (
 type PINStatus struct {
 	Type        PINType
 	RetriesLeft int
-	Blocked     bool
-	Verified    bool
+	// MaxRetries is -1 when the token cannot report the configured limit.
+	// -2 denotes an effectively unlimited retry counter.
+	MaxRetries int
+	Blocked    bool
+	Verified   bool
 }
 
 // PINStatus reads the state of the specified reference without presenting a value.
 func (c *Client) PINStatus(pinType PINType) (PINStatus, error) {
-	status := PINStatus{Type: pinType, RetriesLeft: -1}
+	status := PINStatus{Type: pinType, RetriesLeft: -1, MaxRetries: -1}
 
 	resp, err := c.sendCommand(verifyPINStatusCommand(pinType))
 	if err != nil {
@@ -39,6 +42,7 @@ func (c *Client) PINStatus(pinType PINType) (PINStatus, error) {
 	}
 	if retries, ok := iso7816.IsPINRetryStatus(sw); ok {
 		status.RetriesLeft = retries
+		status.Blocked = retries == 0
 		return status, nil
 	}
 	if sw == iso7816.SwAuthBlocked {
@@ -69,7 +73,7 @@ func (c *Client) VerifyPINWithType(pinType PINType, pin string) error {
 	}
 	sw := resp.StatusWord()
 	if retries, ok := iso7816.IsPINRetryStatus(sw); ok {
-		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining", retries)
+		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining: %w", retries, resp.Err())
 	}
 	if err := resp.Err(); err != nil {
 		return fmt.Errorf("piv: verify pin: %w", err)

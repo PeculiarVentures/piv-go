@@ -33,7 +33,7 @@ func TestYubiKeyAdapterPINStatusFromMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if status.RetriesLeft != 2 || status.Blocked {
+	if status.RetriesLeft != 2 || status.MaxRetries != 3 || status.Blocked {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 }
@@ -70,6 +70,29 @@ func TestYubiKeyAdapterTokenLabelUsesSerialNumber(t *testing.T) {
 	}
 
 	testtrace.RequireMatchFile(t, "testdata/token_label_apdu_trace.txt", mock.APDULog())
+}
+
+func TestYubiKeyIdentityReadsSerialOnce(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetSuccessResponse(0xF8, []byte{0x01, 0x98, 0x24, 0x66})
+	session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}
+	identity, err := adapters.ReadTokenIdentityWithSession(session, NewAdapter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Label != "YubiKey PIV #26748006" || !bytes.Equal(identity.SerialNumber, []byte{0x01, 0x98, 0x24, 0x66}) {
+		t.Fatalf("unexpected identity: %+v", identity)
+	}
+	count := 0
+	for _, command := range card.TransmittedCommands {
+		if command[1] == 0xF8 {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("GET SERIAL calls = %d, want 1", count)
+	}
 }
 
 func TestYubiKeyAdapterCapabilitiesIncludeSerialNumber(t *testing.T) {
@@ -141,8 +164,7 @@ func TestYubiKeyAdapterDescribeSlotUsesMetadata(t *testing.T) {
 	certificateObject := iso7816.EncodeTLV(0x53, append(append(iso7816.EncodeTLV(0x70, certificateDER), iso7816.EncodeTLV(0x71, []byte{0x00})...), iso7816.EncodeTLV(0xFE, nil)...))
 
 	mock := emulator.NewCard()
-	mock.EnqueueResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
-	mock.EnqueueResponse(0xCB, certificateObject, uint16(iso7816.SwSuccess))
+	mock.SetSuccessResponse(0xCB, certificateObject)
 	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLV(piv.AlgECCP256, false, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)))
 
 	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "Yubico YubiKey OTP+FIDO+CCID"}
@@ -223,9 +245,11 @@ func TestYubiKeyAdapterDeleteKeyUsesMoveKey(t *testing.T) {
 	challengeResp := iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x81, challenge))
 
 	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xA4, nil)
 	mock.EnqueueResponse(0x87, challengeResp, uint16(iso7816.SwSuccess))
 	mock.EnqueueResponse(0x87, nil, uint16(iso7816.SwSuccess))
 	mock.SetSuccessResponse(0xF6, nil)
+	mock.SetSuccessResponse(0xDB, nil)
 
 	session := &adapters.Session{
 		Client:              piv.NewClient(mock),
@@ -251,6 +275,28 @@ func TestYubiKeyAdapterDeleteKeyUsesMoveKey(t *testing.T) {
 	if deleteCmd[2] != 0xFF || deleteCmd[3] != byte(piv.SlotAuthentication) {
 		t.Fatalf("unexpected delete command: %X", deleteCmd)
 	}
+
+	// F2: the slot object holding the stored public key template must be
+	// cleared after MOVE KEY, otherwise inspection keeps reporting the key.
+	var clearPayload []byte
+	for _, command := range mock.TransmittedCommands {
+		if len(command) > 1 && command[1] == 0xDB {
+			parsed, err := iso7816.ParseCommand(command)
+			if err != nil {
+				t.Fatalf("parse PUT DATA: %v", err)
+			}
+			tlvs, err := iso7816.ParseAllTLV(parsed.Data)
+			if err != nil {
+				t.Fatalf("parse PUT DATA payload: %v", err)
+			}
+			if object := iso7816.FindTag(tlvs, 0x53); object != nil && len(object.Value) == 0 {
+				clearPayload = command
+			}
+		}
+	}
+	if clearPayload == nil {
+		t.Fatalf("expected PUT DATA clearing the slot object, got: % X", mock.TransmittedCommands)
+	}
 }
 
 func TestYubiKeyAdapterDeleteKeyReportsUnsupportedFirmware(t *testing.T) {
@@ -258,6 +304,7 @@ func TestYubiKeyAdapterDeleteKeyReportsUnsupportedFirmware(t *testing.T) {
 	challengeResp := iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x81, challenge))
 
 	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xA4, nil)
 	mock.EnqueueResponse(0x87, challengeResp, uint16(iso7816.SwSuccess))
 	mock.EnqueueResponse(0x87, nil, uint16(iso7816.SwSuccess))
 	mock.SetResponse(0xF6, nil, uint16(iso7816.SwInsNotSupported))
@@ -274,8 +321,12 @@ func TestYubiKeyAdapterDeleteKeyReportsUnsupportedFirmware(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported firmware error")
 	}
-	if !strings.Contains(err.Error(), "firmware 5.6.0 does not support key deletion") {
-		t.Fatalf("unexpected error: %v", err)
+	want := "delete YubiKey key from slot 9A (PIV applet version 5.6.0): key deletion is not supported on this firmware, requires 5.7.0 or later"
+	if err.Error() != want {
+		t.Fatalf("unexpected error: %q, want %q", err.Error(), want)
+	}
+	if strings.Count(err.Error(), "\n") != 0 {
+		t.Fatalf("delete-key error must be a single line, got %q", err.Error())
 	}
 }
 

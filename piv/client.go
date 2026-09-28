@@ -48,7 +48,7 @@ func (c *Client) VerifyPIN(pin string) error {
 	}
 	sw := resp.StatusWord()
 	if retries, ok := iso7816.IsPINRetryStatus(sw); ok {
-		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining", retries)
+		return fmt.Errorf("piv: verify pin: wrong PIN, %d retries remaining: %w", retries, resp.Err())
 	}
 	if err := resp.Err(); err != nil {
 		return fmt.Errorf("piv: verify pin: %w", err)
@@ -58,7 +58,10 @@ func (c *Client) VerifyPIN(pin string) error {
 
 // GetCertificate reads the certificate from the specified slot.
 func (c *Client) GetCertificate(slot Slot) ([]byte, error) {
-	tag := slotToObjectID(slot)
+	tag, err := ObjectIDForSlot(slot)
+	if err != nil {
+		return nil, fmt.Errorf("piv: get certificate from slot %s: %w", slot, err)
+	}
 	data, err := c.GetData(tag)
 	if err != nil {
 		return nil, fmt.Errorf("piv: get certificate from slot %s: %w", slot, err)
@@ -70,10 +73,66 @@ func (c *Client) GetCertificate(slot Slot) ([]byte, error) {
 	return cert, nil
 }
 
+// RSASignHashMode selects how Client.Sign formats an RSA challenge. It is
+// explicit so a 32-byte raw message is never confused with a SHA-256 digest.
+type RSASignHashMode int
+
+const (
+	// RSASignHashNone formats the challenge as raw PKCS#1 v1.5 type-1
+	// padding without DigestInfo: EM = 00 01 FF..FF 00 || data. This
+	// mirrors ykman _pad_message (yubikit/piv.py): RSA always carries
+	// type-1 padding, and "raw" means "no DigestInfo", not textbook RSA
+	// without padding.
+	RSASignHashNone RSASignHashMode = iota
+	// RSASignHashSHA256 wraps a 32-byte SHA-256 digest with the DigestInfo
+	// prefix before type-1 padding: EM = 00 01 FF..FF 00 || DigestInfo ||
+	// digest.
+	RSASignHashSHA256
+)
+
 // Sign performs a GENERAL AUTHENTICATE operation to sign data using
 // the key in the specified slot with the given algorithm.
-func (c *Client) Sign(alg byte, slot Slot, data []byte) ([]byte, error) {
-	resp, err := c.sendCommand(generalAuthenticateCommand(alg, slot, data))
+//
+// All RSA algorithms apply host-side PKCS#1 v1.5 type-1 formatting so the
+// challenge is exactly modulus-length. RSASignHashSHA256 expects a 32-byte
+// digest and wraps it in SHA-256 DigestInfo before padding. RSASignHashNone
+// pads data as supplied, including a caller-supplied DigestInfo. For
+// compatibility, an already encoded RSA-1024/2048 modulus-length block with
+// hashMode None passes through byte-for-byte; RSA-3072/4096 always pad and
+// reject oversize input before any APDU. Use Authenticate for other raw
+// operations.
+// hashMode is ignored for non-RSA algorithms: Ed25519 and ML-DSA sign the raw
+// message without padding, X25519 cannot sign and
+// rejects with "x25519 cannot sign: use ECDH"; ML-KEM has no sign flow and
+// gap-rejects without sending an APDU.
+func (c *Client) Sign(alg byte, slot Slot, data []byte, hashMode RSASignHashMode) ([]byte, error) {
+	if alg == AlgX25519 {
+		return nil, x25519SignError(fmt.Sprintf("slot %s", slot))
+	}
+	if IsMLKEMAlgorithm(alg) {
+		return nil, unsupportedExtendedAlgorithmError(fmt.Sprintf("sign with slot %s", slot), alg)
+	}
+	if _, ok := rsaModulusLength(alg); ok {
+		padded, err := formatRSAChallenge(alg, data, hashMode)
+		if err != nil {
+			return nil, err
+		}
+		data = padded
+	}
+	authCmd := generalAuthenticateCommand(alg, slot, data)
+	var (
+		resp *iso7816.Response
+		err  error
+	)
+	if alg == AlgRSA1024 || alg == AlgRSA2048 {
+		// RSA-1024/2048 also run on legacy firmware without
+		// extended-APDU support: chain oversized challenges (CLA 0x10)
+		// instead of sending one extended-length AUTHENTICATE.
+		// Extension algorithms keep the proven extended form.
+		resp, err = c.sendAuthenticate(authCmd)
+	} else {
+		resp, err = c.sendCommand(authCmd)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("piv: sign with slot %s: %w", slot, err)
 	}
@@ -103,9 +162,221 @@ func (c *Client) Sign(alg byte, slot Slot, data []byte) ([]byte, error) {
 	return sigTLV.Value, nil
 }
 
+// sendAuthenticate issues an RSA-1024/2048 GENERAL AUTHENTICATE command,
+// splitting payloads above the short-APDU limit into chained commands (CLA
+// 0x10 intermediates, CLA 0x00 final), mirroring ykman and PutData. Legacy
+// firmware without extended-APDU support (for example YubiKey NEO) rejects
+// a single extended-length AUTHENTICATE with 6700, while host-padded RSA
+// challenges always exceed 255 bytes. Payloads within the short limit go
+// out byte-for-byte as before. Sign formats its challenge before this point;
+// Authenticate accepts caller-supplied challenge bytes unchanged.
+func (c *Client) sendAuthenticate(cmd *iso7816.Command) (*iso7816.Response, error) {
+	if len(cmd.Data) <= 0xFF {
+		return c.sendCommand(cmd)
+	}
+	const maxChunkSize = 216
+	data := cmd.Data
+	for len(data) > maxChunkSize {
+		chunk := &iso7816.Command{
+			Cla:  0x10,
+			Ins:  cmd.Ins,
+			P1:   cmd.P1,
+			P2:   cmd.P2,
+			Data: data[:maxChunkSize],
+			Le:   -1,
+		}
+		resp, err := c.sendCommand(chunk)
+		if err != nil {
+			return nil, err
+		}
+		if err := resp.Err(); err != nil {
+			return nil, err
+		}
+		data = data[maxChunkSize:]
+	}
+	final := &iso7816.Command{
+		Cla:  cmd.Cla,
+		Ins:  cmd.Ins,
+		P1:   cmd.P1,
+		P2:   cmd.P2,
+		Data: data,
+		Le:   cmd.Le,
+	}
+	return c.sendCommand(final)
+}
+
 // Execute sends an arbitrary ISO 7816 command through the client transport.
 func (c *Client) Execute(cmd *iso7816.Command) (*iso7816.Response, error) {
 	return c.sendCommand(cmd)
+}
+
+// sha256DigestInfoPrefix is the DER DigestInfo prefix for SHA-256 used in
+// PKCS#1 v1.5 signatures (RFC 8017): the 32-byte digest follows.
+var sha256DigestInfoPrefix = []byte{
+	0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+	0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+	0x00, 0x04, 0x20,
+}
+
+// rsaModulusLength returns the modulus byte length for a PIV RSA algorithm.
+func rsaModulusLength(algorithm byte) (int, bool) {
+	switch algorithm {
+	case AlgRSA1024:
+		return 128, true
+	case AlgRSA2048:
+		return 256, true
+	case AlgRSA3072:
+		return 384, true
+	case AlgRSA4096:
+		return 512, true
+	default:
+		return 0, false
+	}
+}
+
+// formatRSAChallenge formats a sign challenge for all RSA sizes as a
+// PKCS#1 v1.5 type-1 encryption block of exactly modulus length: EM = 00 01
+// FF..FF 00 || T. The hashMode is explicit: RSASignHashSHA256 requires a
+// 32-byte SHA-256 digest and wraps it with the DigestInfo prefix, while
+// RSASignHashNone pads the message raw without DigestInfo. Raw here follows
+// ykman _pad_message (yubikit/piv.py:546): RSA always carries PKCS#1 v1.5
+// type-1 padding, so raw means "no DigestInfo", not unpadded textbook RSA.
+// Only legacy RSA-1024/2048 keep a byte-for-byte passthrough for an already
+// encoded modulus-length block under hashMode None; RSA-3072/4096 always pad
+// so a modulus-length plain file is rejected as too long before any APDU.
+// Oversize messages are rejected before any APDU is sent.
+func formatRSAChallenge(algorithm byte, data []byte, hashMode RSASignHashMode) ([]byte, error) {
+	k, ok := rsaModulusLength(algorithm)
+	if !ok {
+		return nil, fmt.Errorf("piv: unsupported RSA challenge algorithm 0x%02X", algorithm)
+	}
+	if hashMode == RSASignHashNone && len(data) == k && (algorithm == AlgRSA1024 || algorithm == AlgRSA2048) {
+		return append([]byte(nil), data...), nil
+	}
+	var t []byte
+	switch hashMode {
+	case RSASignHashSHA256:
+		if len(data) != 32 {
+			return nil, fmt.Errorf("piv: RSA SHA-256 challenge must be 32 bytes for algorithm 0x%02X, got %d bytes", algorithm, len(data))
+		}
+		t = append(append([]byte(nil), sha256DigestInfoPrefix...), data...)
+	case RSASignHashNone:
+		t = data
+	default:
+		return nil, fmt.Errorf("piv: unsupported RSA hash mode %d", int(hashMode))
+	}
+	if len(t) > k-11 {
+		return nil, fmt.Errorf("piv: RSA message too long for algorithm 0x%02X: got %d bytes, maximum %d", algorithm, len(data), k-11)
+	}
+	em := make([]byte, k)
+	em[0] = 0x00
+	em[1] = 0x01
+	for i := 2; i < k-len(t)-1; i++ {
+		em[i] = 0xFF
+	}
+	em[k-len(t)-1] = 0x00
+	copy(em[k-len(t):], t)
+	return em, nil
+}
+
+// CalculateSecret performs X25519 ECDH key agreement with the slot key and a
+// 32-byte peer public key: GENERAL AUTHENTICATE 00 87 E1 <slot> carrying
+// 7C{82 empty, 85 peer} and returning 7C{82 32-byte secret}.
+func (c *Client) CalculateSecret(slot Slot, peerPublicKey []byte) ([]byte, error) {
+	if len(peerPublicKey) != 32 {
+		return nil, fmt.Errorf("piv: unsupported ECDH peer key length %d, must be 32 bytes", len(peerPublicKey))
+	}
+	inner := iso7816.EncodeTLV(0x82, nil)
+	inner = append(inner, iso7816.EncodeTLV(0x85, peerPublicKey)...)
+	cmd := &iso7816.Command{
+		Cla:  0x00,
+		Ins:  0x87, // GENERAL AUTHENTICATE
+		P1:   AlgX25519,
+		P2:   byte(slot),
+		Data: iso7816.EncodeTLV(0x7C, inner),
+		Le:   256,
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("piv: ECDH with slot %s: %w", slot, err)
+	}
+	if err := resp.Err(); err != nil {
+		return nil, fmt.Errorf("piv: ECDH with slot %s: %w", slot, err)
+	}
+	tlvs, err := iso7816.ParseAllTLV(resp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("piv: parse ECDH response: %w", err)
+	}
+	authTLV := iso7816.FindTag(tlvs, 0x7C)
+	if authTLV == nil {
+		return nil, fmt.Errorf("piv: auth response tag 0x7C not found")
+	}
+	innerTLVs, err := iso7816.ParseAllTLV(authTLV.Value)
+	if err != nil {
+		return nil, fmt.Errorf("piv: parse auth template: %w", err)
+	}
+	secretTLV := iso7816.FindTag(innerTLVs, 0x82)
+	if secretTLV == nil {
+		return nil, fmt.Errorf("piv: secret tag 0x82 not found")
+	}
+	if len(secretTLV.Value) != 32 {
+		return nil, fmt.Errorf("piv: unexpected ECDH secret length %d", len(secretTLV.Value))
+	}
+	return append([]byte(nil), secretTLV.Value...), nil
+}
+
+// Decapsulate performs ML-KEM decapsulation with the slot key and a
+// variant-sized ciphertext: GENERAL AUTHENTICATE 00 87 <alg> <slot> carrying
+// 7C{82 empty, 86 ciphertext} and returning 7C{82 32-byte shared secret}.
+// The algorithm must select an ML-KEM variant and the ciphertext must have
+// the variant length (768/1088/1568 bytes for ML-KEM-512/768/1024); both are
+// validated before any APDU is sent. Encapsulation stays host-side (for
+// example with crypto/mlkem): the card only decapsulates.
+func (c *Client) Decapsulate(algorithm byte, slot Slot, ciphertext []byte) ([]byte, error) {
+	ciphertextLen, ok := MLKEMCiphertextLength(algorithm)
+	if !ok {
+		return nil, fmt.Errorf("piv: unsupported decapsulation algorithm 0x%02X", algorithm)
+	}
+	if len(ciphertext) != ciphertextLen {
+		return nil, fmt.Errorf("piv: unsupported ML-KEM ciphertext length %d for algorithm 0x%02X, must be %d bytes", len(ciphertext), algorithm, ciphertextLen)
+	}
+	inner := iso7816.EncodeTLV(0x82, nil)
+	inner = append(inner, iso7816.EncodeTLV(0x86, ciphertext)...)
+	cmd := &iso7816.Command{
+		Cla:  0x00,
+		Ins:  0x87, // GENERAL AUTHENTICATE
+		P1:   algorithm,
+		P2:   byte(slot),
+		Data: iso7816.EncodeTLV(0x7C, inner),
+		Le:   256,
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("piv: decapsulate with slot %s: %w", slot, err)
+	}
+	if err := resp.Err(); err != nil {
+		return nil, fmt.Errorf("piv: decapsulate with slot %s: %w", slot, err)
+	}
+	tlvs, err := iso7816.ParseAllTLV(resp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("piv: parse decapsulate response: %w", err)
+	}
+	authTLV := iso7816.FindTag(tlvs, 0x7C)
+	if authTLV == nil {
+		return nil, fmt.Errorf("piv: auth response tag 0x7C not found")
+	}
+	innerTLVs, err := iso7816.ParseAllTLV(authTLV.Value)
+	if err != nil {
+		return nil, fmt.Errorf("piv: parse auth template: %w", err)
+	}
+	secretTLV := iso7816.FindTag(innerTLVs, 0x82)
+	if secretTLV == nil {
+		return nil, fmt.Errorf("piv: secret tag 0x82 not found")
+	}
+	if len(secretTLV.Value) != 32 {
+		return nil, fmt.Errorf("piv: unexpected KEM secret length %d", len(secretTLV.Value))
+	}
+	return append([]byte(nil), secretTLV.Value...), nil
 }
 
 func (c *Client) sendCommand(cmd *iso7816.Command) (*iso7816.Response, error) {

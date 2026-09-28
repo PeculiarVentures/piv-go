@@ -28,7 +28,10 @@ func (c *Client) PutCertificate(slot Slot, certData []byte) error {
 	certObj = append(certObj, iso7816.EncodeTLV(0x71, []byte{0x00})...)
 	certObj = append(certObj, iso7816.EncodeTLV(0xFE, nil)...)
 
-	tag := slotToObjectID(slot)
+	tag, err := ObjectIDForSlot(slot)
+	if err != nil {
+		return fmt.Errorf("piv: put certificate slot %s: %w", slot, err)
+	}
 	dataTLV := iso7816.EncodeTLV(0x53, certObj)
 	if err := c.PutData(tag, dataTLV); err != nil {
 		return fmt.Errorf("piv: put certificate slot %s: %w", slot, err)
@@ -101,15 +104,35 @@ func ParsePublicKeyObject(data []byte) (crypto.PublicKey, error) {
 			return parseECDSAPublicKey(elliptic.P256(), innerTLVs)
 		case 97:
 			return parseECDSAPublicKey(elliptic.P384(), innerTLVs)
+		case 32:
+			// Ed25519 and X25519 share tag 0x86 with a 32-byte raw
+			// key and cannot be told apart without algorithm
+			// context, so the opaque key carries Algorithm zero
+			// until the caller (for example slot metadata) fills
+			// it in.
+			return &OpaquePublicKey{Raw: append([]byte(nil), pointTLV.Value...)}, nil
 		default:
-			return nil, fmt.Errorf("piv: unsupported EC point length %d", len(pointTLV.Value))
+			return nil, &UnsupportedPublicKeyError{Tag: 0x86, Length: len(pointTLV.Value), Detail: fmt.Sprintf("unsupported EC point length %d", len(pointTLV.Value))}
+		}
+	}
+
+	// YubiKey 6 post-quantum keys: tag 0x87 carries ML-DSA public keys
+	// and tag 0x88 carries ML-KEM public keys. The variant is inferred
+	// from the value length; anything else is a typed error, not a panic.
+	for _, tag := range []uint{0x87, 0x88} {
+		if keyTLV := iso7816.FindTag(innerTLVs, tag); keyTLV != nil {
+			algorithm, ok := inferOpaqueAlgorithm(tag, len(keyTLV.Value))
+			if !ok {
+				return nil, &UnsupportedPublicKeyError{Tag: tag, Length: len(keyTLV.Value), Detail: fmt.Sprintf("unsupported key length %d for tag 0x%X", len(keyTLV.Value), tag)}
+			}
+			return &OpaquePublicKey{Algorithm: algorithm, Raw: append([]byte(nil), keyTLV.Value...)}, nil
 		}
 	}
 
 	modulusTLV := iso7816.FindTag(innerTLVs, 0x81)
 	exponentTLV := iso7816.FindTag(innerTLVs, 0x82)
 	if modulusTLV == nil || exponentTLV == nil {
-		return nil, fmt.Errorf("piv: unsupported public key encoding")
+		return nil, &UnsupportedPublicKeyError{Tag: 0x7F49, Length: len(keyTLV.Value), Detail: "unsupported public key encoding"}
 	}
 	exponent := new(big.Int).SetBytes(exponentTLV.Value)
 	if !exponent.IsInt64() {

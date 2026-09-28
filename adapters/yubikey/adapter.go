@@ -85,9 +85,10 @@ func (a *Adapter) Capabilities() adapters.CapabilityReport {
 		adapters.CapabilityPINStatus:           {Support: adapters.CapabilityVendor, Notes: "prefers YubiKey metadata when available"},
 		adapters.CapabilityManagementKeyStatus: {Support: adapters.CapabilityVendor, Notes: "reads YubiKey MGM metadata; retry counters are unlimited"},
 		adapters.CapabilityPUKStatus:           {Support: adapters.CapabilityVendor, Notes: "falls back when empty VERIFY returns 6A88"},
-		adapters.CapabilityReadSerialNumber:    {Support: adapters.CapabilityVendor, Notes: "uses YubiKey GET SERIAL vendor command"},
+		adapters.CapabilityReadSerialNumber:    {Support: adapters.CapabilityVendor, Notes: "uses PIV GET SERIAL with OTP applet fallback"},
 		adapters.CapabilityReadTokenLabel:      {Support: adapters.CapabilityVendor, Notes: "uses YubiKey serial to generate token label"},
 		adapters.CapabilityChangeManagementKey: {Notes: "uses YubiKey SET MANAGEMENT KEY command"},
 		adapters.CapabilityResetToken:          {Notes: "blocks PIN and PUK before issuing YubiKey reset"},
+		adapters.CapabilityAttestKey:           {Support: adapters.CapabilityVendor, Notes: "uses YubiKey ATTEST KEY on firmware 4.3.0+"},
 	})
 }

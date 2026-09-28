@@ -48,6 +48,26 @@ const (
 	KeyAlgorithmRSA1024 KeyAlgorithm = "rsa1024"
 	// KeyAlgorithmRSA2048 indicates an RSA-2048 key.
 	KeyAlgorithmRSA2048 KeyAlgorithm = "rsa2048"
+	// KeyAlgorithmRSA3072 indicates an RSA-3072 key (YubiKey 6 extension).
+	KeyAlgorithmRSA3072 KeyAlgorithm = "rsa3072"
+	// KeyAlgorithmRSA4096 indicates an RSA-4096 key (YubiKey 6 extension).
+	KeyAlgorithmRSA4096 KeyAlgorithm = "rsa4096"
+	// KeyAlgorithmEd25519 indicates an Ed25519 key (YubiKey 6 extension).
+	KeyAlgorithmEd25519 KeyAlgorithm = "ed25519"
+	// KeyAlgorithmX25519 indicates an X25519 key (YubiKey 6 extension).
+	KeyAlgorithmX25519 KeyAlgorithm = "x25519"
+	// KeyAlgorithmMLDSA44 indicates an ML-DSA-44 key (YubiKey 6 extension).
+	KeyAlgorithmMLDSA44 KeyAlgorithm = "mldsa44"
+	// KeyAlgorithmMLDSA65 indicates an ML-DSA-65 key (YubiKey 6 extension).
+	KeyAlgorithmMLDSA65 KeyAlgorithm = "mldsa65"
+	// KeyAlgorithmMLDSA87 indicates an ML-DSA-87 key (YubiKey 6 extension).
+	KeyAlgorithmMLDSA87 KeyAlgorithm = "mldsa87"
+	// KeyAlgorithmMLKEM512 indicates an ML-KEM-512 key (YubiKey 6 extension).
+	KeyAlgorithmMLKEM512 KeyAlgorithm = "mlkem512"
+	// KeyAlgorithmMLKEM768 indicates an ML-KEM-768 key (YubiKey 6 extension).
+	KeyAlgorithmMLKEM768 KeyAlgorithm = "mlkem768"
+	// KeyAlgorithmMLKEM1024 indicates an ML-KEM-1024 key (YubiKey 6 extension).
+	KeyAlgorithmMLKEM1024 KeyAlgorithm = "mlkem1024"
 )
 
 // TouchPolicy describes the normalized presence policy for user touch interaction.
@@ -118,6 +138,26 @@ func NormalizeKeyAlgorithm(value byte) KeyAlgorithm {
 		return KeyAlgorithmRSA1024
 	case piv.AlgRSA2048:
 		return KeyAlgorithmRSA2048
+	case piv.AlgRSA3072:
+		return KeyAlgorithmRSA3072
+	case piv.AlgRSA4096:
+		return KeyAlgorithmRSA4096
+	case piv.AlgEd25519:
+		return KeyAlgorithmEd25519
+	case piv.AlgX25519:
+		return KeyAlgorithmX25519
+	case piv.AlgMLDSA44:
+		return KeyAlgorithmMLDSA44
+	case piv.AlgMLDSA65:
+		return KeyAlgorithmMLDSA65
+	case piv.AlgMLDSA87:
+		return KeyAlgorithmMLDSA87
+	case piv.AlgMLKEM512:
+		return KeyAlgorithmMLKEM512
+	case piv.AlgMLKEM768:
+		return KeyAlgorithmMLKEM768
+	case piv.AlgMLKEM1024:
+		return KeyAlgorithmMLKEM1024
 	default:
 		return KeyAlgorithmUnknown
 	}

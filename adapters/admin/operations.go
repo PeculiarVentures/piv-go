@@ -44,7 +44,7 @@ func readManagementKeyStatus(session *adapters.Session, adapter adapters.Adapter
 		session.Observe(adapters.LogLevelDebug, adapter, "read-management-key-status", "using adapter-specific MGM status handling")
 		return statusAdapter.ManagementKeyStatus(session)
 	}
-	return adapters.ManagementKeyStatus{}, fmt.Errorf("adapters: management key status is not supported")
+	return adapters.ManagementKeyStatus{}, adapters.ErrManagementKeyStatusUnsupported
 }
 
 // ChangePIN resolves token-specific PIN rotation with a standard fallback.
@@ -109,6 +109,33 @@ func changeManagementKey(session *adapters.Session, adapter adapters.Adapter, ne
 	}
 	session.Observe(adapters.LogLevelInfo, adapter, "change-management-key", "delegating management key rotation to adapter")
 	return credentialAdapter.ChangeManagementKey(session, newAlgorithm, newKey)
+}
+
+// ChangeManagementKeyWithTouch rotates the management key, requesting touch
+// confirmation when requireTouch is true. Adapters implementing
+// ManagementKeyTouchAdapter handle the flag directly; otherwise the call
+// falls back to ChangeManagementKey when touch is not required and fails as
+// unsupported when it is.
+func ChangeManagementKeyWithTouch(runtime *adapters.Runtime, newAlgorithm byte, newKey []byte, requireTouch bool) error {
+	if err := requireRuntime(runtime); err != nil {
+		return err
+	}
+	return changeManagementKeyWithTouch(runtime.Session, runtime.Adapter, newAlgorithm, newKey, requireTouch)
+}
+
+func changeManagementKeyWithTouch(session *adapters.Session, adapter adapters.Adapter, newAlgorithm byte, newKey []byte, requireTouch bool) error {
+	if err := requireSessionClient(session); err != nil {
+		return err
+	}
+	if touchAdapter, ok := adapter.(adapters.ManagementKeyTouchAdapter); ok {
+		session.Observe(adapters.LogLevelInfo, adapter, "change-management-key", "delegating touch-aware management key rotation to adapter")
+		return touchAdapter.ChangeManagementKeyWithTouch(session, newAlgorithm, newKey, requireTouch)
+	}
+	if requireTouch {
+		session.Observe(adapters.LogLevelInfo, adapter, "change-management-key", "adapter does not implement touch-aware management key rotation")
+		return fmt.Errorf("adapters: touch-aware management key rotation is not supported")
+	}
+	return changeManagementKey(session, adapter, newAlgorithm, newKey)
 }
 
 // UnblockPIN resolves token-specific PIN recovery with a standard fallback.

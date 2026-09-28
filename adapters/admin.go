@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/PeculiarVentures/piv-go/piv"
@@ -8,6 +9,10 @@ import (
 
 // PINStatus aliases the standard PIV PIN status model used by adapter helpers.
 type PINStatus = piv.PINStatus
+
+// ErrManagementKeyStatusUnsupported means the selected adapter cannot report
+// management-key retry status. Callers can distinguish it from a read failure.
+var ErrManagementKeyStatusUnsupported = errors.New("adapters: management key status is not supported")
 
 const (
 	// UnknownRetries represents an unavailable retry counter value.
@@ -46,6 +51,17 @@ type CredentialAdapter interface {
 	// ChangeManagementKey rotates the management key using the session's current
 	// management credentials and the new key material.
 	ChangeManagementKey(session *Session, newAlgorithm byte, newKey []byte) error
+}
+
+// ManagementKeyTouchAdapter exposes management key rotation with an explicit
+// touch-requirement flag. It extends CredentialAdapter without changing it:
+// adapters that only implement CredentialAdapter keep the non-touch behavior.
+type ManagementKeyTouchAdapter interface {
+	// ChangeManagementKeyWithTouch rotates the management key using the
+	// session's current management credentials and the new key material,
+	// requiring touch confirmation for management operations when
+	// requireTouch is true.
+	ChangeManagementKeyWithTouch(session *Session, newAlgorithm byte, newKey []byte, requireTouch bool) error
 }
 
 // ManagementKeyAlgorithmAdapter resolves the algorithm used for ambiguous

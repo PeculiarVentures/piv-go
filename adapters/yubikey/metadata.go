@@ -35,8 +35,33 @@ func (a *Adapter) ManagementKeyAlgorithm(session *adapters.Session, key []byte) 
 	}
 }
 
+// Version returns the version reported by PIV GET VERSION (INS 0xFD).
+//
+// On YubiKey NEO this can be the PIV applet version (for example 1.0.4),
+// distinct from device firmware and OTP status. Use OTPStatusVersion for a
+// capability hint and avoid presenting this value as device firmware.
+func (a *Adapter) Version(session *adapters.Session) (string, error) {
+	return a.PIVVersion(session)
+}
+
+// PIVVersion explicitly names the source of the version returned by Version.
+func (a *Adapter) PIVVersion(session *adapters.Session) (string, error) {
+	if err := requireSessionClient(session); err != nil {
+		return "", err
+	}
+	session.Observe(adapters.LogLevelDebug, a, "read-version", "reading YubiKey PIV GET VERSION")
+	return readVersion(session.Client)
+}
+
 // ChangeManagementKey updates the active YubiKey management key.
 func (a *Adapter) ChangeManagementKey(session *adapters.Session, newAlgorithm byte, newKey []byte) error {
+	return a.ChangeManagementKeyWithTouch(session, newAlgorithm, newKey, false)
+}
+
+// ChangeManagementKeyWithTouch updates the active YubiKey management key,
+// requesting touch confirmation for management operations when requireTouch
+// is true.
+func (a *Adapter) ChangeManagementKeyWithTouch(session *adapters.Session, newAlgorithm byte, newKey []byte, requireTouch bool) error {
 	if err := requireSessionClient(session); err != nil {
 		return err
 	}
@@ -54,7 +79,7 @@ func (a *Adapter) ChangeManagementKey(session *adapters.Session, newAlgorithm by
 		return fmt.Errorf("authenticate current management key: %w", err)
 	}
 	session.Observe(adapters.LogLevelInfo, a, "change-management-key", "writing YubiKey management key metadata and value")
-	if err := setManagementKey(session.Client, newAlgorithm, newKey, false); err != nil {
+	if err := setManagementKey(session.Client, newAlgorithm, newKey, requireTouch); err != nil {
 		return err
 	}
 	session.Observe(adapters.LogLevelDebug, a, "change-management-key", "verifying the new management key")
@@ -169,6 +194,14 @@ func readSlotMetadata(client *piv.Client, slot piv.Slot) (yubiKeySlotMetadata, e
 		publicKey, err = piv.ParsePublicKeyObject(iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, publicKeyEncoded)))
 		if err != nil {
 			return yubiKeySlotMetadata{}, fmt.Errorf("yubikey: parse slot public key: %w", err)
+		}
+		// Stored objects carry no algorithm context, so an ambiguous
+		// Ed25519/X25519 raw key parses with Algorithm zero. Resolve
+		// it from the metadata algorithm byte when recognized.
+		if opaque, ok := publicKey.(*piv.OpaquePublicKey); ok && opaque.Algorithm == 0 {
+			if algorithm[0] == piv.AlgEd25519 || algorithm[0] == piv.AlgX25519 {
+				opaque.Algorithm = algorithm[0]
+			}
 		}
 	}
 

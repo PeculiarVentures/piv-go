@@ -52,7 +52,7 @@ func NewInfoService(targets *TargetResolver) *InfoService {
 }
 
 // Devices lists visible readers and PIV readiness.
-func (s *InfoService) Devices(ctx context.Context, global GlobalOptions) (Response, error) {
+func (s *InfoService) Devices(ctx context.Context, global GlobalOptions) (response Response, err error) {
 	devices, err := s.targets.Discover(ctx)
 	if err != nil {
 		return Response{}, err
@@ -65,7 +65,7 @@ func (s *InfoService) Devices(ctx context.Context, global GlobalOptions) (Respon
 }
 
 // Info gathers a multi-section token summary.
-func (s *InfoService) Info(ctx context.Context, request InfoRequest) (Response, error) {
+func (s *InfoService) Info(ctx context.Context, request InfoRequest) (response Response, err error) {
 	sections, err := normalizeInfoSections(request.Sections)
 	if err != nil {
 		return Response{}, err
@@ -74,6 +74,14 @@ func (s *InfoService) Info(ctx context.Context, request InfoRequest) (Response, 
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -120,7 +128,7 @@ func (s *InfoService) Info(ctx context.Context, request InfoRequest) (Response, 
 	}
 
 	result.State = deriveTokenState(target.Runtime, slots, capabilityReport)
-	response := Response{
+	response = Response{
 		Command:  "info",
 		Target:   target.Summary,
 		Result:   result,
@@ -153,11 +161,19 @@ func sanitizeDisplayBytes(data []byte) string {
 }
 
 // SlotList lists the primary user slots.
-func (s *InfoService) SlotList(ctx context.Context, global GlobalOptions) (Response, error) {
+func (s *InfoService) SlotList(ctx context.Context, global GlobalOptions) (response Response, err error) {
 	target, err := s.targets.Resolve(ctx, global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -166,7 +182,7 @@ func (s *InfoService) SlotList(ctx context.Context, global GlobalOptions) (Respo
 	if err != nil {
 		return Response{}, err
 	}
-	response := Response{
+	response = Response{
 		Command: "slot-list",
 		Target:  target.Summary,
 		Result:  SlotListResult{Slots: slots},
@@ -176,11 +192,19 @@ func (s *InfoService) SlotList(ctx context.Context, global GlobalOptions) (Respo
 }
 
 // SlotShow displays one slot in detail.
-func (s *InfoService) SlotShow(ctx context.Context, request SlotRequest) (Response, error) {
+func (s *InfoService) SlotShow(ctx context.Context, request SlotRequest) (response Response, err error) {
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -189,7 +213,7 @@ func (s *InfoService) SlotShow(ctx context.Context, request SlotRequest) (Respon
 	if err != nil {
 		return Response{}, err
 	}
-	response := Response{
+	response = Response{
 		Command: "slot-show",
 		Target:  target.Summary,
 		Result:  SlotShowResult{Slot: slot},
@@ -199,11 +223,19 @@ func (s *InfoService) SlotShow(ctx context.Context, request SlotRequest) (Respon
 }
 
 // CertExport exports a slot certificate in PEM or DER format.
-func (s *InfoService) CertExport(ctx context.Context, request ExportRequest) (Response, error) {
+func (s *InfoService) CertExport(ctx context.Context, request ExportRequest) (response Response, err error) {
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -239,7 +271,7 @@ func (s *InfoService) CertExport(ctx context.Context, request ExportRequest) (Re
 	} else {
 		result.Data = string(encoded)
 	}
-	response := Response{Command: "cert-export", Target: target.Summary, Result: result}
+	response = Response{Command: "cert-export", Target: target.Summary, Result: result}
 	if request.Out == "" {
 		response.rawOutput = encoded
 	}
@@ -247,12 +279,24 @@ func (s *InfoService) CertExport(ctx context.Context, request ExportRequest) (Re
 	return response, nil
 }
 
-// KeyPublic exports a public key in PEM or DER format.
-func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Response, error) {
+// KeyPublic exports a public key in PEM or DER format. Ed25519 opaque keys
+// encode as standard PEM/DER through the standard library. All other opaque
+// keys (X25519, ML-DSA/ML-KEM, ambiguous) keep the PEM/DER gap and must be
+// exported with --format raw, base64, or hex, which renders the raw key
+// bytes via EncodeBinary.
+func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (response Response, err error) {
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -267,6 +311,9 @@ func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Res
 	}
 	if format == "" {
 		format = "pem"
+	}
+	if _, ok := opaquePublicKeyAlgorithm(publicKey); ok && isOpaqueRawFormat(format) {
+		return s.opaqueKeyResponse(target, request, publicKey, format)
 	}
 	encoded, err := EncodePublicKey(publicKey, format)
 	if err != nil {
@@ -288,7 +335,132 @@ func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Res
 	} else {
 		result.Data = string(encoded)
 	}
-	response := Response{Command: "key-public", Target: target.Summary, Result: result}
+	response = Response{Command: "key-public", Target: target.Summary, Result: result}
+	if request.Out == "" {
+		response.rawOutput = encoded
+	}
+	response.traceLines = target.TraceLines()
+	return response, nil
+}
+
+// isOpaqueRawFormat reports whether the requested public key format selects
+// raw opaque bytes instead of PEM/DER.
+func isOpaqueRawFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "raw", "base64", "hex":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *InfoService) opaqueKeyResponse(target *ResolvedTarget, request ExportRequest, publicKey interface{}, format string) (response Response, err error) {
+	var raw []byte
+	switch key := publicKey.(type) {
+	case *piv.OpaquePublicKey:
+		if key == nil {
+			return Response{}, NotFoundError("the requested public key is not present", "inspect slot state with piv slot show <slot>", nil)
+		}
+		raw = key.Raw
+	case piv.OpaquePublicKey:
+		raw = key.Raw
+	default:
+		return Response{}, UnsupportedError("the selected slot uses an opaque key without PEM or DER encoding support", "rerun with --format raw, base64, or hex for the opaque key bytes")
+	}
+	normalized := strings.ToLower(strings.TrimSpace(format))
+	switch normalized {
+	case "pem", "der":
+		return Response{}, UnsupportedError("the selected slot uses an opaque key without PEM or DER encoding support", "rerun with --format raw, base64, or hex for the opaque key bytes")
+	case "", "base64", "hex", "raw":
+		if normalized == "" {
+			normalized = "base64"
+		}
+	default:
+		return Response{}, UsageError("unsupported public key format", "use pem, der, raw, base64, or hex (raw encodings for post-quantum keys)")
+	}
+	encoded, effectiveEncoding, err := EncodeBinary(raw, normalized)
+	if err != nil {
+		return Response{}, err
+	}
+	result := ArtifactResult{Kind: "public-key", Format: effectiveEncoding, Encoding: effectiveEncoding, Size: len(encoded)}
+	if request.Out != "" {
+		if err := os.WriteFile(request.Out, encoded, 0o644); err != nil {
+			return Response{}, IOError("unable to write public key output", "check the output path and permissions", err)
+		}
+		result.Path = request.Out
+	} else if request.Global.JSON {
+		if effectiveEncoding == "raw" {
+			result.Data = base64.StdEncoding.EncodeToString(raw)
+			result.Encoding = "base64"
+		} else {
+			result.Data = strings.TrimSpace(string(encoded))
+		}
+	} else {
+		result.Data = strings.TrimSpace(string(encoded))
+	}
+	response = Response{Command: "key-public", Target: target.Summary, Result: result}
+	if request.Out == "" {
+		response.rawOutput = encoded
+	}
+	response.traceLines = target.TraceLines()
+	return response, nil
+}
+
+// Attest exports the attestation certificate for a slot key in PEM or DER
+// format. Attestation is a read-only vendor operation: tokens without a
+// KeyAttestationAdapter report it as unsupported.
+func (s *InfoService) Attest(ctx context.Context, request ExportRequest) (response Response, err error) {
+	if isAttestationSlot(request.Slot) {
+		return Response{}, UnsupportedError("attestation is not supported for slot F9", "attest one of auth, sign, key-mgmt, or card-auth")
+	}
+	target, err := s.targets.Resolve(ctx, request.Global)
+	if err != nil {
+		return Response{}, err
+	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
+	defer func() {
+		_ = target.Close()
+	}()
+
+	attestationDER, err := attestKey(target.Runtime, request.Slot)
+	if err != nil {
+		return Response{}, err
+	}
+	format := request.Format
+	if format == "" {
+		format = request.Global.DefaultCertFmt
+	}
+	if format == "" {
+		format = "pem"
+	}
+	encoded, err := EncodeCertificate(attestationDER, format)
+	if err != nil {
+		return Response{}, err
+	}
+	result := ArtifactResult{Kind: "attestation", Format: strings.ToLower(format), Size: len(encoded)}
+	if request.Out != "" {
+		if err := os.WriteFile(request.Out, encoded, 0o644); err != nil {
+			return Response{}, IOError("unable to write attestation output", "check the output path and permissions", err)
+		}
+		result.Path = request.Out
+	} else if request.Global.JSON {
+		if strings.EqualFold(format, "der") {
+			result.Data = base64.StdEncoding.EncodeToString(encoded)
+			result.Encoding = "base64"
+		} else {
+			result.Data = string(encoded)
+		}
+	} else {
+		result.Data = string(encoded)
+	}
+	response = Response{Command: "key-attest", Target: target.Summary, Result: result}
 	if request.Out == "" {
 		response.rawOutput = encoded
 	}
@@ -297,11 +469,19 @@ func (s *InfoService) KeyPublic(ctx context.Context, request ExportRequest) (Res
 }
 
 // PINStatus reports the card PIN retry state.
-func (s *InfoService) PINStatus(ctx context.Context, request StatusRequest) (Response, error) {
+func (s *InfoService) PINStatus(ctx context.Context, request StatusRequest) (response Response, err error) {
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -310,7 +490,7 @@ func (s *InfoService) PINStatus(ctx context.Context, request StatusRequest) (Res
 	if err != nil {
 		return Response{}, err
 	}
-	response := Response{
+	response = Response{
 		Command: "pin-status",
 		Target:  target.Summary,
 		Result: CredentialStatus{
@@ -325,11 +505,19 @@ func (s *InfoService) PINStatus(ctx context.Context, request StatusRequest) (Res
 }
 
 // PUKStatus reports the PUK retry state when the token supports it.
-func (s *InfoService) PUKStatus(ctx context.Context, request StatusRequest) (Response, error) {
+func (s *InfoService) PUKStatus(ctx context.Context, request StatusRequest) (response Response, err error) {
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -350,7 +538,7 @@ func (s *InfoService) PUKStatus(ctx context.Context, request StatusRequest) (Res
 	if err != nil {
 		return Response{}, err
 	}
-	response := Response{
+	response = Response{
 		Command: "puk-status",
 		Target:  target.Summary,
 		Result: CredentialStatus{
@@ -364,11 +552,19 @@ func (s *InfoService) PUKStatus(ctx context.Context, request StatusRequest) (Res
 	return response, nil
 }
 
-func (s *InfoService) MGMStatus(ctx context.Context, request StatusRequest) (Response, error) {
+func (s *InfoService) MGMStatus(ctx context.Context, request StatusRequest) (response Response, err error) {
 	target, err := s.targets.Resolve(ctx, request.Global)
 	if err != nil {
 		return Response{}, err
 	}
+	// attachResolveTrace carries the collected APDU/operation trace on every
+	// failure below so diagnostics reach stderr (or the trace file) instead
+	// of being dropped with the empty error response.
+	defer func() {
+		if err != nil {
+			err = WithTrace(err, target.TraceLines())
+		}
+	}()
 	defer func() {
 		_ = target.Close()
 	}()
@@ -389,7 +585,7 @@ func (s *InfoService) MGMStatus(ctx context.Context, request StatusRequest) (Res
 	if err != nil {
 		return Response{}, err
 	}
-	response := Response{
+	response = Response{
 		Command: "mgm-status",
 		Target:  target.Summary,
 		Result: CredentialStatus{

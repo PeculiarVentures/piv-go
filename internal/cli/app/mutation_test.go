@@ -229,3 +229,33 @@ func assertCommandOrder(t *testing.T, commands [][]byte, firstINS byte, secondIN
 		t.Fatalf("expected INS %02X before %02X, got: % X", firstINS, secondINS, commands)
 	}
 }
+
+// TestKeyDeleteUnknownSlotStateRefusesNoOp covers the P2 regression where
+// KeyDelete returned success Changed=false ("key is already absent") without
+// sending MOVE KEY when the slot state was unknown (public object absent,
+// metadata read 6F00). Unknown must surface as an explicit error.
+func TestKeyDeleteUnknownSlotStateRefusesNoOp(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xA4, nil)
+	card.SetResponse(0xCB, nil, uint16(iso7816.SwFileNotFound))
+	card.SetResponse(0xF7, nil, uint16(iso7816.SwUnknown))
+	targets := NewTargetResolver(mutationTestCardContextFactory{builders: map[string]func() piv.Card{
+		"YubiKey Test": func() piv.Card { return card },
+	}}, nil, bytes.NewReader(nil), &bytes.Buffer{})
+	service := NewMutationService(targets, NewOperationPlanner(bytes.NewReader(nil), &bytes.Buffer{}), bytes.NewReader(nil), &bytes.Buffer{})
+	t.Setenv("UNKNOWN_DELETE_MGM", "010203040506070801020304050607080102030405060708")
+	_, err := service.KeyDelete(context.Background(), DeleteRequest{
+		Global: GlobalOptions{Reader: "YubiKey Test", Adapter: "yubikey", NonInteractive: true},
+		Slot:   piv.SlotSignature, Yes: true,
+	}, SecretRequest{Label: "management key", EnvVar: "UNKNOWN_DELETE_MGM"})
+	if err == nil {
+		t.Fatalf("KeyDelete on unknown slot state must fail, got success")
+	}
+	if hasINS(card.TransmittedCommands, 0xF6) {
+		t.Fatalf("no MOVE KEY must be sent when the slot state is unknown")
+	}
+	mapped := (&ErrorMapper{}).Map(err)
+	if mapped == nil || mapped.Code != "internal-error" || mapped.ExitCode != 9 {
+		t.Fatalf("unknown slot state must map to internal-error exit 9, got %+v", mapped)
+	}
+}

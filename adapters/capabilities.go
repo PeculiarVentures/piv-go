@@ -38,6 +38,7 @@ const (
 	CapabilityManagementKeyStatus    CapabilityID = "management-key-status"
 	CapabilityResetSlot              CapabilityID = "reset-slot"
 	CapabilityResetToken             CapabilityID = "reset-token"
+	CapabilityAttestKey              CapabilityID = "attest-key"
 )
 
 // Capability describes support for a user-facing token operation.
@@ -138,6 +139,13 @@ func supportForSlotReset(adapter Adapter) CapabilitySupport {
 func supportForInitialization(adapter Adapter) CapabilitySupport {
 	if initAdapter, ok := adapter.(InitializationAdapter); ok {
 		_ = initAdapter
+		return CapabilityVendor
+	}
+	return CapabilityUnsupported
+}
+
+func supportForAttestation(adapter Adapter) CapabilitySupport {
+	if _, ok := adapter.(KeyAttestationAdapter); ok {
 		return CapabilityVendor
 	}
 	return CapabilityUnsupported

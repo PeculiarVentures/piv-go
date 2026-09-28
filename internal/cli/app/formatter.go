@@ -179,6 +179,8 @@ func (f *Formatter) renderSlotTable(writer io.Writer, slots []SlotView) {
 		key := "empty"
 		if slot.KeyPresent {
 			key = slot.KeyAlgorithm
+		} else if slot.KeyUnknown {
+			key = "unknown"
 		}
 		cert := "empty"
 		if slot.CertPresent {
@@ -337,6 +339,11 @@ func (f *Formatter) mutationSummary(result MutationResult, target TargetSummary)
 		return "key generated"
 	case "key-delete":
 		return "key deleted"
+	case "key-import":
+		if result.Algorithm != "" {
+			return fmt.Sprintf("key imported (%s)", result.Algorithm)
+		}
+		return "key imported"
 	case "pin-change":
 		return "PIN changed"
 	case "pin-unblock":
@@ -357,6 +364,13 @@ func (f *Formatter) mutationSummary(result MutationResult, target TargetSummary)
 	default:
 		return fallback(result.Action, "operation completed")
 	}
+}
+
+// WriteTrace renders failure-carried trace lines to stderr (or the trace
+// file), never to stdout, so artifact bytes stay clean. It is the error-path
+// counterpart of the success trace in WriteResponse.
+func (f *Formatter) WriteTrace(stderr io.Writer, lines []string, options GlobalOptions) error {
+	return f.writeTrace(stderr, lines, options)
 }
 
 func (f *Formatter) writeTrace(stderr io.Writer, lines []string, options GlobalOptions) error {
@@ -402,6 +416,8 @@ func artifactLabel(kind string) string {
 		return "certificate"
 	case "public-key":
 		return "public key"
+	case "attestation":
+		return "attestation certificate"
 	case "signature":
 		return "signature"
 	case "challenge-response":

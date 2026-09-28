@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"time"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
@@ -62,6 +63,62 @@ type Response struct {
 	rawOutput  []byte
 }
 
+// TracedError carries the APDU/operation trace collected before a failure
+// alongside the failure itself. The trace is rendered to stderr (or the
+// trace file) by the command layer and never to stdout, so artifact bytes
+// stay clean. Unwrap preserves errors.As/errors.Is behavior, so status-word
+// and CLIError mapping are unaffected by the wrapper.
+type TracedError struct {
+	cause error
+	trace []string
+}
+
+// Error returns the underlying failure message.
+func (e *TracedError) Error() string {
+	if e == nil || e.cause == nil {
+		return ""
+	}
+	return e.cause.Error()
+}
+
+// Unwrap exposes the underlying cause for errors.As and errors.Is.
+func (e *TracedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// TraceLines returns the trace lines captured with the failure.
+func (e *TracedError) TraceLines() []string {
+	if e == nil {
+		return nil
+	}
+	return e.trace
+}
+
+// WithTrace attaches collected trace lines to err for the failure path.
+// A nil error stays nil; an error without trace lines is returned unwrapped
+// so success-equivalent and pre-resolve failures keep their exact type.
+func WithTrace(err error, lines []string) error {
+	if err == nil || len(lines) == 0 {
+		return err
+	}
+	return &TracedError{cause: err, trace: append([]string(nil), lines...)}
+}
+
+// TraceLinesFromError extracts trace lines carried by err, if any.
+func TraceLinesFromError(err error) []string {
+	if err == nil {
+		return nil
+	}
+	var traced interface{ TraceLines() []string }
+	if errors.As(err, &traced) {
+		return traced.TraceLines()
+	}
+	return nil
+}
+
 // DevicesResult describes the currently visible PC/SC readers.
 type DevicesResult struct {
 	Devices []DeviceInfo `json:"devices"`
@@ -99,9 +156,13 @@ type CapabilityView struct {
 
 // SlotView is the stable representation of one slot state.
 type SlotView struct {
-	Name         string `json:"name"`
-	Hex          string `json:"hex"`
-	KeyPresent   bool   `json:"key_present"`
+	Name       string `json:"name"`
+	Hex        string `json:"hex"`
+	KeyPresent bool   `json:"key_present"`
+	// KeyUnknown reports that key absence could not be confirmed (the
+	// slot read failed ambiguously). Consumers should report
+	// skip/slot_state_unknown rather than treating the slot as empty.
+	KeyUnknown   bool   `json:"key_unknown,omitempty"`
 	KeyAlgorithm string `json:"key_algorithm,omitempty"`
 	CertPresent  bool   `json:"cert_present"`
 	CertLabel    string `json:"cert_label,omitempty"`

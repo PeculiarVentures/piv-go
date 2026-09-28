@@ -132,11 +132,11 @@ func (c *cli) newManagementCommand() *cobra.Command {
 		Short: "Verify the management key",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			algorithm, algorithmName, err := app.ParseManagementAlgorithm(verifyAlgorithm)
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				algorithm, algorithmName, err := app.ParseManagementAlgorithm(verifyAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.MGMVerify(ctx, app.MGMVerifyRequest{
 					Global:        global,
 					Key:           secretRequest("management key", "Enter management key: ", verifyEnv, "PIV_MANAGEMENT_KEY", verifyStdin),
@@ -156,6 +156,7 @@ func (c *cli) newManagementCommand() *cobra.Command {
 	var rotateNewEnv string
 	var rotateAlgorithm string
 	var rotateNewAlgorithm string
+	var rotateTouch bool
 	var rotateYes bool
 	var rotateDryRun bool
 	rotate := &cobra.Command{
@@ -163,15 +164,15 @@ func (c *cli) newManagementCommand() *cobra.Command {
 		Short: "Rotate the management key",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			algorithm, algorithmName, err := app.ParseManagementAlgorithm(rotateAlgorithm)
-			if err != nil {
-				return err
-			}
-			newAlgorithm, newAlgorithmName, err := app.ParseManagementAlgorithm(rotateNewAlgorithm)
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				algorithm, algorithmName, err := app.ParseManagementAlgorithm(rotateAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
+				newAlgorithm, newAlgorithmName, err := app.ParseManagementAlgorithm(rotateNewAlgorithm)
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.MGMRotate(ctx, app.MGMRotateRequest{
 					Global:           global,
 					CurrentKey:       secretRequest("current management key", "Enter current management key: ", rotateCurrentEnv, "PIV_MANAGEMENT_KEY", rotateCurrentStdin),
@@ -180,6 +181,7 @@ func (c *cli) newManagementCommand() *cobra.Command {
 					AlgorithmName:    algorithmName,
 					NewAlgorithm:     newAlgorithm,
 					NewAlgorithmName: newAlgorithmName,
+					RequireTouch:     rotateTouch,
 					Yes:              rotateYes,
 					DryRun:           rotateDryRun,
 				})
@@ -192,6 +194,7 @@ func (c *cli) newManagementCommand() *cobra.Command {
 	rotate.Flags().StringVar(&rotateNewEnv, "new-env", "", "Read the new management key from the specified environment variable")
 	rotate.Flags().StringVar(&rotateAlgorithm, "alg", "auto", "Current management key algorithm: auto, 3des, aes128, aes192, or aes256")
 	rotate.Flags().StringVar(&rotateNewAlgorithm, "new-alg", "", "New management key algorithm: 3des, aes128, aes192, or aes256")
+	rotate.Flags().BoolVar(&rotateTouch, "touch", false, "Require touch confirmation for management operations")
 	rotate.Flags().BoolVarP(&rotateYes, "yes", "y", false, "Skip the destructive-operation confirmation")
 	rotate.Flags().BoolVar(&rotateDryRun, "dry-run", false, "Show the planned action without mutating the token")
 
@@ -275,11 +278,11 @@ func (c *cli) newSetupCommand() *cobra.Command {
 		Short: "Reset one slot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slot, err := app.ParseSlot(args[0])
-			if err != nil {
-				return err
-			}
 			return c.execute(cmd, func(ctx context.Context, global app.GlobalOptions) (app.Response, error) {
+				slot, err := app.ParseSlotForMutation(args[0])
+				if err != nil {
+					return app.Response{}, err
+				}
 				return c.mutations.SetupResetSlot(ctx, app.SetupResetSlotRequest{
 					Global:        global,
 					ManagementKey: secretRequest("management key", "Enter management key: ", resetSlotMGMEnv, "PIV_MANAGEMENT_KEY", resetSlotMGMStdin),

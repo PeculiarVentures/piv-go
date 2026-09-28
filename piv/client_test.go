@@ -1,8 +1,10 @@
 package piv
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"errors"
 	"testing"
 
 	internalutil "github.com/PeculiarVentures/piv-go/internal"
@@ -216,5 +218,144 @@ func TestMockCard_Close(t *testing.T) {
 	}
 	if !mock.Closed {
 		t.Error("expected Closed=true")
+	}
+}
+
+func TestClient_SignRSA2048ChainsOversizedChallenge(t *testing.T) {
+	// A host-padded 256-byte RSA challenge exceeds the short-APDU limit:
+	// it must go out as chained short APDUs (CLA 0x10 intermediates),
+	// never as one extended-length AUTHENTICATE that legacy firmware
+	// rejects with 6700. The challenge padding itself is untouched.
+	message := make([]byte, 256)
+	for i := range message {
+		message[i] = byte(i)
+	}
+	sig := make([]byte, 256)
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, sig)))
+	got, err := NewClient(mock).Sign(AlgRSA2048, SlotSignature, message, RSASignHashNone)
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	if len(got) != len(sig) {
+		t.Fatalf("signature length = %d, want %d", len(got), len(sig))
+	}
+	var payload []byte
+	for index, raw := range mock.TransmittedCommands {
+		if len(raw) < 2 || raw[1] != 0x87 {
+			t.Fatalf("unexpected INS in %X", raw)
+		}
+		if len(raw) >= 5 && raw[4] == 0x00 {
+			t.Fatalf("AUTHENTICATE must use short APDUs, got extended-length header: %X", raw[:7])
+		}
+		command, err := iso7816.ParseCommand(raw)
+		if err != nil {
+			t.Fatalf("parse command %d: %v", index, err)
+		}
+		if index < len(mock.TransmittedCommands)-1 && command.Cla != 0x10 {
+			t.Fatalf("intermediate chunk %d must use CLA 0x10, got %02X", index, command.Cla)
+		}
+		payload = append(payload, command.Data...)
+	}
+	if len(mock.TransmittedCommands) < 2 {
+		t.Fatalf("expected chained AUTHENTICATE, got %d commands", len(mock.TransmittedCommands))
+	}
+	outer, err := iso7816.ParseAllTLV(payload)
+	if err != nil {
+		t.Fatalf("parse outer: %v", err)
+	}
+	auth := iso7816.FindTag(outer, 0x7C)
+	if auth == nil {
+		t.Fatalf("0x7C not found in %X", payload)
+	}
+	inner, err := iso7816.ParseAllTLV(auth.Value)
+	if err != nil {
+		t.Fatalf("parse inner: %v", err)
+	}
+	challenge := iso7816.FindTag(inner, 0x81)
+	if challenge == nil || string(challenge.Value) != string(message) {
+		t.Fatal("0x81 challenge must carry the message verbatim")
+	}
+}
+
+func TestClient_SignSmallRSAChallengeIsPaddedAndChained(t *testing.T) {
+	message := []byte{0x01, 0x02, 0x03}
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0x87, iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x82, []byte{0xAA})))
+	if _, err := NewClient(mock).Sign(AlgRSA2048, SlotSignature, message, RSASignHashNone); err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	if len(mock.TransmittedCommands) != 2 {
+		t.Fatalf("padded RSA-2048 challenge needs 2 short APDUs, got %d", len(mock.TransmittedCommands))
+	}
+	command, err := iso7816.ParseCommand(mock.TransmittedCommands[0])
+	if err != nil {
+		t.Fatalf("parse command: %v", err)
+	}
+	if command.Cla != 0x10 || command.Ins != 0x87 {
+		t.Fatalf("unexpected header: %X", mock.TransmittedCommands[0][:4])
+	}
+}
+
+func TestClient_ReadStoredPublicKey_RetiredSlotTargetsRetiredObject(t *testing.T) {
+	point := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)
+	dataObj := iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point)))
+
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xCB, dataObj)
+
+	publicKey, err := NewClient(mock).ReadStoredPublicKey(0x82)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := publicKey.(*ecdsa.PublicKey); !ok {
+		t.Fatalf("expected ECDSA public key, got %T", publicKey)
+	}
+	requireSingleObjectCommand(t, mock, 0xCB, retiredSlotObjectTLVs()[0x82])
+}
+
+func TestClient_ReadStoredPublicKey_UnsupportedSlotDoesNotTransmit(t *testing.T) {
+	for _, slot := range []Slot{0x81, 0x96, SlotManagement} {
+		t.Run(slot.String(), func(t *testing.T) {
+			mock := emulator.NewCard()
+			_, err := NewClient(mock).ReadStoredPublicKey(slot)
+			if !errors.Is(err, ErrUnsupportedSlot) {
+				t.Fatalf("error = %v, want ErrUnsupportedSlot", err)
+			}
+			if len(mock.TransmittedCommands) != 0 {
+				t.Fatalf("unsupported slot must not transmit a command, got % X", mock.TransmittedCommands)
+			}
+		})
+	}
+}
+
+func TestClient_StoreGeneratedPublicKey_RetiredSlotTargetsRetiredObject(t *testing.T) {
+	publicKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: elliptic.P256().Params().Gx, Y: elliptic.P256().Params().Gy}
+
+	mock := emulator.NewCard()
+	mock.SetSuccessResponse(0xDB, nil)
+
+	if err := NewClient(mock).StoreGeneratedPublicKey(0x82, AlgECCP256, publicKey); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	requireSingleObjectCommand(t, mock, 0xDB, retiredSlotObjectTLVs()[0x82])
+}
+
+// TestClient_StoreGeneratedPublicKey_UnsupportedSlotDoesNotTransmit keeps the
+// historical pre-encoding gate: an unmapped slot fails with
+// ErrUnsupportedSlot and no APDU.
+func TestClient_StoreGeneratedPublicKey_UnsupportedSlotDoesNotTransmit(t *testing.T) {
+	publicKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: elliptic.P256().Params().Gx, Y: elliptic.P256().Params().Gy}
+
+	mock := emulator.NewCard()
+	err := NewClient(mock).StoreGeneratedPublicKey(SlotManagement, AlgECCP256, publicKey)
+	if !errors.Is(err, ErrUnsupportedSlot) {
+		t.Fatalf("error = %v, want ErrUnsupportedSlot", err)
+	}
+	if len(mock.TransmittedCommands) != 0 {
+		t.Fatalf("unsupported slot must not transmit a command, got % X", mock.TransmittedCommands)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("unsupported slot")) {
+		t.Fatalf("error %q must keep the historical unsupported slot message", err)
 	}
 }

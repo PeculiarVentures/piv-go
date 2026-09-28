@@ -49,6 +49,34 @@ type KeyDeletionAdapter interface {
 	DeleteKey(session *Session, slot piv.Slot) error
 }
 
+// KeyAttestationAdapter defines device-specific key attestation behavior.
+//
+// Tokens that can prove a slot key was generated on-device implement this
+// capability to encapsulate the required APDU sequence. The returned bytes
+// are the raw DER-encoded X.509 attestation certificate without verification.
+type KeyAttestationAdapter interface {
+	// AttestKey returns the raw DER attestation certificate for the key in
+	// the specified slot.
+	AttestKey(session *Session, slot piv.Slot) ([]byte, error)
+}
+
+// KeyGenerationPolicyAdapter defines key generation with explicit YubiKey
+// PIN/touch policies. Adapters that do not implement it fall back to the
+// standard generation flow, which only supports default policies.
+type KeyGenerationPolicyAdapter interface {
+	// GenerateKey generates a key in the slot with the given algorithm and
+	// PIN/touch policies, persisting any vendor-specific public key state.
+	GenerateKey(session *Session, slot piv.Slot, algorithm byte, pinPolicy byte, touchPolicy byte) (crypto.PublicKey, error)
+}
+
+// KeyImportAdapter defines device-specific private key import behavior with
+// explicit YubiKey PIN/touch policies.
+type KeyImportAdapter interface {
+	// ImportKey imports a private key into the slot with the given algorithm
+	// and PIN/touch policies.
+	ImportKey(session *Session, slot piv.Slot, algorithm byte, privateKey crypto.PrivateKey, pinPolicy byte, touchPolicy byte) error
+}
+
 // CertificateAdapter defines device-specific certificate lifecycle overrides.
 //
 // The standard certificate lifecycle lives in piv.Client.ReadCertificate,
