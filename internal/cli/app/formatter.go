@@ -174,7 +174,7 @@ func (f *Formatter) renderInfo(writer io.Writer, target TargetSummary, result In
 
 func (f *Formatter) renderSlotTable(writer io.Writer, slots []SlotView) {
 	table := tabwriter.NewWriter(writer, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(table, "SLOT\tHEX\tKEY\tCERT")
+	_, _ = fmt.Fprintln(table, "SLOT\tHEX\tKEY\tPUBLIC KEY\tSOURCE\tCERT")
 	for _, slot := range slots {
 		key := "empty"
 		if slot.KeyPresent {
@@ -186,7 +186,11 @@ func (f *Formatter) renderSlotTable(writer io.Writer, slots []SlotView) {
 		if slot.CertPresent {
 			cert = slot.CertLabel
 		}
-		_, _ = fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", slot.Name, slot.Hex, key, cert)
+		publicKey, source := "-", "-"
+		if slot.PublicKeySource != "" {
+			publicKey, source = slot.KeyAlgorithm, string(slot.PublicKeySource)
+		}
+		_, _ = fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", slot.Name, slot.Hex, key, publicKey, source, cert)
 	}
 	_ = table.Flush()
 }

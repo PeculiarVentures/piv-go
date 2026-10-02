@@ -111,13 +111,15 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 
 func mergeSlotObjects(standard, mirror adapters.SlotDescription) adapters.SlotDescription {
 	d := standard
-	if mirror.KeyState == adapters.SlotStatePresent && standard.KeyState != adapters.SlotStatePresent {
-		d.SetKeyState(adapters.SlotStatePresent, nil)
+	// Both objects contain writable public material, not authoritative
+	// private-key metadata. Merge observability errors independently of the
+	// public key, preferring a saved template over a certificate key.
+	state, err := mergeObjectState(standard.KeyState, standard.KeyError, mirror.KeyState, mirror.KeyError)
+	d.SetKeyState(state, err)
+	if mirror.PublicKey != nil && (d.PublicKey == nil || d.PublicKeySource == adapters.PublicKeySourceCertificate && mirror.PublicKeySource == adapters.PublicKeySourceStoredTemplate) {
 		d.PublicKey = mirror.PublicKey
+		d.PublicKeySource = mirror.PublicKeySource
 		d.KeyAlgorithm = mirror.KeyAlgorithm
-	} else if standard.KeyState != adapters.SlotStatePresent {
-		state, err := mergeObjectState(standard.KeyState, standard.KeyError, mirror.KeyState, mirror.KeyError)
-		d.SetKeyState(state, err)
 	}
 	if mirror.CertState == adapters.SlotStatePresent && standard.CertState != adapters.SlotStatePresent {
 		d.CertDER = mirror.CertDER
@@ -132,18 +134,6 @@ func mergeSlotObjects(standard, mirror adapters.SlotDescription) adapters.SlotDe
 	}
 	if d.KeyState == adapters.SlotStateUnknown && d.KeyError == nil {
 		d.KeyUnknownReason = adapters.KeyUnknownReasonUnobservable
-	}
-	if d.KeyState != adapters.SlotStatePresent && d.CertState == adapters.SlotStatePresent {
-		// A certificate identifies public material but does not prove that
-		// the matching private key is available on the token.
-		if d.PublicKey == nil {
-			if standard.CertState == adapters.SlotStatePresent {
-				d.PublicKey = standard.PublicKey
-			} else {
-				d.PublicKey = mirror.PublicKey
-			}
-			d.KeyAlgorithm = adapterslots.PublicKeyAlgorithmName(d.PublicKey)
-		}
 	}
 	return d
 }

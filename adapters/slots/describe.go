@@ -149,8 +149,12 @@ func DescribeDataObject(data []byte, readErr error) adapters.SlotDescription {
 					if keyErr != nil {
 						d.SetKeyState(adapters.SlotStateError, keyErr)
 					} else {
-						d.SetKeyState(adapters.SlotStatePresent, nil)
+						// The saved template can outlive or differ from the
+						// private key after changes made by another tool.
+						d.SetKeyState(adapters.SlotStateUnknown, nil)
+						d.KeyUnknownReason = adapters.KeyUnknownReasonUnobservable
 						d.PublicKey = key
+						d.PublicKeySource = adapters.PublicKeySourceStoredTemplate
 						d.KeyAlgorithm = PublicKeyAlgorithmName(key)
 					}
 				}
@@ -166,6 +170,7 @@ func DescribeDataObject(data []byte, readErr error) adapters.SlotDescription {
 						d.CertLabel = certLabel
 						if d.PublicKey == nil {
 							d.PublicKey = certKey
+							d.PublicKeySource = adapters.PublicKeySourceCertificate
 							d.KeyAlgorithm = PublicKeyAlgorithmName(certKey)
 						}
 					}

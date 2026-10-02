@@ -532,9 +532,9 @@ func TestNEOGenerateCertSignDeleteFlow(t *testing.T) {
 	}
 }
 
-// TestNEOKeyDeleteUnsupportedExit4 covers F5: MOVE KEY 6D00 surfaces the
-// exact unsupported string and maps to exit 4.
-func TestNEOKeyDeleteUnsupportedExit4(t *testing.T) {
+// A saved template does not prove that the private key is present. The
+// existing unknown-state guard must refuse deletion before authentication.
+func TestNEOKeyDeleteRefusesUnobservablePrivateKey(t *testing.T) {
 	h := newNEOHarness(t)
 	targets := neoTestTargets(h)
 	mutations := NewMutationService(targets, NewOperationPlanner(bytes.NewReader(nil), &bytes.Buffer{}), bytes.NewReader(nil), &bytes.Buffer{})
@@ -550,19 +550,21 @@ func TestNEOKeyDeleteUnsupportedExit4(t *testing.T) {
 		t.Fatalf("KeyImport() error = %v", err)
 	}
 
+	beforeDelete := len(h.card.TransmittedCommands)
 	_, err := mutations.KeyDelete(context.Background(), DeleteRequest{
 		Global: neoGlobal(), Slot: piv.SlotSignature, Yes: true,
 	}, mgm)
 	mapped := mapExitCode(t, err)
-	if mapped.ExitCode != 4 || mapped.Code != "unsupported-capability" {
-		t.Fatalf("key delete = %+v, want unsupported exit 4", mapped)
+	if mapped.ExitCode != 9 || mapped.Code != "internal-error" || !strings.Contains(mapped.Message, "key state is unknown") {
+		t.Fatalf("key delete = %+v, want unknown-state refusal", mapped)
 	}
-	if mapped.Hint != "inspect capabilities with piv info" {
+	if mapped.Hint != "inspect slot state with piv slot show <slot>" {
 		t.Fatalf("unexpected hint %q", mapped.Hint)
 	}
-	want := "delete YubiKey key from slot 9C (PIV applet version 3.4.9): key deletion is not supported on this firmware, requires 5.7.0 or later"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("error = %q, want substring %q", err.Error(), want)
+	for _, raw := range h.card.TransmittedCommands[beforeDelete:] {
+		if len(raw) > 1 && (raw[1] == 0x87 || raw[1] == 0xF6 || raw[1] == 0xDB) {
+			t.Fatalf("unknown key state must not authenticate or mutate: %X", raw)
+		}
 	}
 	if len(TraceLinesFromError(err)) == 0 {
 		t.Fatal("key delete failure must carry trace lines")

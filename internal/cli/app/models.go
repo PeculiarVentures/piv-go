@@ -159,13 +159,15 @@ type SlotView struct {
 	Name       string `json:"name"`
 	Hex        string `json:"hex"`
 	KeyPresent bool   `json:"key_present"`
-	// KeyUnknown reports that key absence could not be confirmed (the
-	// slot read failed ambiguously). Consumers should report
+	// KeyUnknown reports an unobservable private key or an ambiguous read
+	// failure. Public material alone cannot establish private-key presence.
+	// Consumers should report
 	// skip/slot_state_unknown rather than treating the slot as empty.
-	KeyUnknown   bool   `json:"key_unknown,omitempty"`
-	KeyAlgorithm string `json:"key_algorithm,omitempty"`
-	CertPresent  bool   `json:"cert_present"`
-	CertLabel    string `json:"cert_label,omitempty"`
+	KeyUnknown      bool                     `json:"key_unknown,omitempty"`
+	KeyAlgorithm    string                   `json:"key_algorithm,omitempty"`
+	PublicKeySource adapters.PublicKeySource `json:"public_key_source,omitempty"`
+	CertPresent     bool                     `json:"cert_present"`
+	CertLabel       string                   `json:"cert_label,omitempty"`
 }
 
 // CredentialsView summarizes the observable credential state.

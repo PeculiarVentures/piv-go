@@ -158,21 +158,28 @@ func readManagementKeyMetadata(client *piv.Client) (yubiKeyManagementMetadata, e
 	return metadata, nil
 }
 
-// ManagementKeyStatus returns management-key metadata for YubiKey tokens.
-// Retry state is not exposed by YubiKey metadata, so retry counters remain unknown.
+// isMetadataUnsupported identifies firmware without GET METADATA support.
+// Other statuses and transport or parse failures must remain read errors.
+func isMetadataUnsupported(err error) bool {
+	return iso7816.IsStatus(err, iso7816.SwInsNotSupported) || iso7816.IsStatus(err, iso7816.SwClaNotSupported)
+}
+
+// ManagementKeyStatus reports unlimited management-key retries on YubiKey.
+// Older firmware can report this status without GET METADATA; algorithm,
+// default-value and policy information remain unavailable on those tokens.
 func (a *Adapter) ManagementKeyStatus(session *adapters.Session) (adapters.ManagementKeyStatus, error) {
 	if err := requireSessionClient(session); err != nil {
 		return adapters.ManagementKeyStatus{}, err
 	}
 	metadata, err := readManagementKeyMetadata(session.Client)
-	if err != nil {
+	if err != nil && !isMetadataUnsupported(err) {
 		return adapters.ManagementKeyStatus{}, fmt.Errorf("yubikey: read management key metadata: %w", err)
 	}
 	status := adapters.ManagementKeyStatus{
 		RetriesLeft: adapters.UnlimitedRetries,
 		MaxRetries:  adapters.UnlimitedRetries,
 	}
-	if metadata.DefaultValue {
+	if err == nil && metadata.DefaultValue {
 		session.Observe(adapters.LogLevelDebug, a, "management-key-status", "management key is default")
 	}
 	return status, nil
