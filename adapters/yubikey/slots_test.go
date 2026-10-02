@@ -2,6 +2,7 @@ package yubikey
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/elliptic"
 	"testing"
 
@@ -29,7 +30,9 @@ func TestYubiKeyAdapterDescribeSlotRetiredSlot(t *testing.T) {
 
 	mock := emulator.NewCard()
 	mock.SetSuccessResponse(0xCB, object)
-	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLV(piv.AlgECCP256, false, point))
+	x, y := elliptic.P256().ScalarBaseMult([]byte{2})
+	metadataPoint := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), x, y)
+	mock.SetSuccessResponse(0xF7, encodeSlotMetadataTLV(piv.AlgECCP256, false, metadataPoint))
 
 	description, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(mock), retiredSlot)
 	if err != nil {
@@ -38,8 +41,12 @@ func TestYubiKeyAdapterDescribeSlotRetiredSlot(t *testing.T) {
 	if !description.KeyPresent || description.KeyUnknown {
 		t.Fatalf("metadata key must mark the key present: %+v", description)
 	}
-	if description.KeyAlgorithm != "eccp256" || description.PublicKey == nil {
+	if description.KeyAlgorithm != "eccp256" || description.PublicKey == nil || description.PublicKeySource != adapters.PublicKeySourceMetadata {
 		t.Fatalf("metadata key must expose the public key and algorithm: %+v", description)
+	}
+	key := description.PublicKey.(*ecdsa.PublicKey)
+	if key.X.Cmp(x) != 0 || key.Y.Cmp(y) != 0 {
+		t.Fatal("metadata must take precedence over both saved template and certificate")
 	}
 	if description.KeyError != nil {
 		t.Fatalf("present key must not carry KeyError: %v", description.KeyError)
@@ -94,9 +101,11 @@ func TestYubiKeyDescribeSlotPublicObjectWithMetadataFailure(t *testing.T) {
 		metadataSW uint16
 		wantState  adapters.SlotState
 		wantError  bool
+		wantReason adapters.KeyUnknownReason
 	}{
-		{"transient security failure", uint16(iso7816.SwSecurityNotSatisfied), adapters.SlotStateError, true},
-		{"NEO unsupported metadata", uint16(iso7816.SwInsNotSupported), adapters.SlotStatePresent, false},
+		{"transient security failure", uint16(iso7816.SwSecurityNotSatisfied), adapters.SlotStateError, true, ""},
+		{"NEO unsupported metadata", uint16(iso7816.SwInsNotSupported), adapters.SlotStateUnknown, false, adapters.KeyUnknownReasonUnobservable},
+		{"unsupported class", uint16(iso7816.SwClaNotSupported), adapters.SlotStateUnknown, false, adapters.KeyUnknownReasonUnobservable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			card := emulator.NewCard()
@@ -106,7 +115,7 @@ func TestYubiKeyDescribeSlotPublicObjectWithMetadataFailure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if d.KeyState != tc.wantState || (d.KeyError != nil) != tc.wantError || d.KeyUnknownReason != "" || d.PublicKey == nil || d.CertState != adapters.SlotStateAbsent {
+			if d.KeyState != tc.wantState || (d.KeyError != nil) != tc.wantError || d.KeyUnknownReason != tc.wantReason || d.PublicKey == nil || d.PublicKeySource != adapters.PublicKeySourceStoredTemplate || d.CertState != adapters.SlotStateAbsent {
 				t.Fatalf("slot description = %+v, want key=%s error=%v and retained public object", d, tc.wantState, tc.wantError)
 			}
 			if tc.wantError && !iso7816.IsStatus(d.KeyError, tc.metadataSW) {
@@ -181,7 +190,7 @@ func TestYubiKeyDescribeSlotMetadataAbsenceOverridesStaleStoredKey(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStateAbsent || d.KeyPresent || d.PublicKey == nil || d.KeyUnknownReason != "" {
+	if d.KeyState != adapters.SlotStateAbsent || d.KeyPresent || d.PublicKey == nil || d.PublicKeySource != adapters.PublicKeySourceStoredTemplate || d.KeyUnknownReason != "" {
 		t.Fatalf("metadata absence must win over stale public storage: %+v", d)
 	}
 }
@@ -194,7 +203,7 @@ func TestYubiKeyDescribeSlotMetadataWithoutPublicKeyPreservesCertificateKey(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStatePresent || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+	if d.KeyState != adapters.SlotStatePresent || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil || d.PublicKeySource != adapters.PublicKeySourceCertificate {
 		t.Fatalf("successful metadata must prove key while preserving certificate public key: %+v", d)
 	}
 }
@@ -207,7 +216,7 @@ func TestYubiKeyDescribeSlotCertificateOnlyWithoutMetadataKeepsPublicKey(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStateUnknown || d.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+	if d.KeyState != adapters.SlotStateUnknown || d.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil || d.PublicKeySource != adapters.PublicKeySourceCertificate {
 		t.Fatalf("certificate provides public key but not private-key proof: %+v", d)
 	}
 }
@@ -222,5 +231,18 @@ func TestYubiKeyDescribeSlotMalformedObjectStaysErrorWithoutMetadata(t *testing.
 	}
 	if d.KeyState != adapters.SlotStateError || d.CertState != adapters.SlotStateError || d.KeyError == nil || d.CertError == nil || d.KeyUnknownReason != "" {
 		t.Fatalf("malformed object must remain an error: %+v", d)
+	}
+}
+
+func TestYubiKeyDescribeSlotMalformedMetadataKeepsCertificate(t *testing.T) {
+	card := emulator.NewCard()
+	card.SetSuccessResponse(0xCB, iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x70, mustCreateYubiKeyTestCertificate(t))))
+	card.SetSuccessResponse(0xF7, []byte{0x01})
+	d, err := NewAdapter().DescribeSlot(newSlotDescriptionSession(card), piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStateError || d.KeyError == nil || d.KeyUnknownReason != "" || d.CertState != adapters.SlotStatePresent || d.PublicKeySource != adapters.PublicKeySourceCertificate || d.Metadata != nil {
+		t.Fatalf("malformed metadata must remain a key error beside certificate observation: %+v", d)
 	}
 }

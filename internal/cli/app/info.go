@@ -671,7 +671,7 @@ func buildCapabilityViews(report adapters.CapabilityReport) []CapabilityView {
 
 func deriveTokenState(runtime *adapters.Runtime, slots []SlotView, report adapters.CapabilityReport) string {
 	for _, slot := range slots {
-		if slot.KeyPresent || slot.CertPresent {
+		if slot.KeyPresent || slot.CertPresent || slot.PublicKeySource != "" {
 			return "initialized"
 		}
 	}

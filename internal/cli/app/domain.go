@@ -107,13 +107,14 @@ func describeSlot(runtime *adapters.Runtime, slot piv.Slot) (SlotView, error) {
 		return SlotView{}, err
 	}
 	return SlotView{
-		Name:         SlotName(slot),
-		Hex:          SlotHex(slot),
-		KeyPresent:   description.KeyPresent,
-		KeyUnknown:   description.KeyUnknown,
-		KeyAlgorithm: description.KeyAlgorithm,
-		CertPresent:  description.CertPresent,
-		CertLabel:    description.CertLabel,
+		Name:            SlotName(slot),
+		Hex:             SlotHex(slot),
+		KeyPresent:      description.KeyPresent,
+		KeyUnknown:      description.KeyUnknown,
+		KeyAlgorithm:    description.KeyAlgorithm,
+		PublicKeySource: description.PublicKeySource,
+		CertPresent:     description.CertPresent,
+		CertLabel:       description.CertLabel,
 	}, nil
 }
 

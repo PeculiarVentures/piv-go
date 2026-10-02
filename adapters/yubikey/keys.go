@@ -6,11 +6,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
-	"crypto/x509"
 	"errors"
 	"fmt"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
+	adapterslots "github.com/PeculiarVentures/piv-go/adapters/slots"
 	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
@@ -231,8 +231,9 @@ func (a *Adapter) Decapsulate(session *adapters.Session, slot piv.Slot, algorith
 // object between the certificate and the public key template: importing a
 // certificate replaces the template, so when the standard public key object
 // carries no 7F49 template but a parseable certificate is present, the key
-// is served from the certificate. When both are absent the original public
-// key error is returned untouched so callers keep the not-found mapping.
+// is served from the certificate. Only unsupported metadata permits the
+// compatibility fallback after a metadata error. Use DescribeSlot to obtain
+// PublicKeySource and a separate, authoritative or unknown private-key state.
 func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypto.PublicKey, error) {
 	if err := requireSessionClient(session); err != nil {
 		return nil, err
@@ -243,21 +244,33 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 		session.Observe(adapters.LogLevelDebug, a, "read-public-key", "using public key from YubiKey slot metadata for %s", slot)
 		return metadata.PublicKey, nil
 	}
+	if err != nil && !isMetadataUnsupported(err) {
+		return nil, fmt.Errorf("yubikey: read slot metadata: %w", err)
+	}
 	session.Observe(adapters.LogLevelDebug, a, "read-public-key", "falling back to standard PIV public key object for %s", slot)
-	publicKey, err := session.Client.ReadPublicKey(slot)
-	if err == nil {
-		return publicKey, nil
-	}
-	certData, certErr := session.Client.ReadCertificate(slot)
-	if certErr != nil {
+	tag, err := piv.ObjectIDForSlot(slot)
+	if err != nil {
 		return nil, err
 	}
-	cert, parseErr := x509.ParseCertificate(certData)
-	if parseErr != nil {
+	data, err := session.Client.GetData(tag)
+	if err != nil {
 		return nil, err
 	}
-	session.Observe(adapters.LogLevelDebug, a, "read-public-key", "using public key from slot certificate for %s", slot)
-	return cert.PublicKey, nil
+	description := adapterslots.DescribeDataObject(data, nil)
+	if description.KeyError != nil {
+		return nil, description.KeyError
+	}
+	if description.PublicKey != nil {
+		if description.PublicKeySource == adapters.PublicKeySourceCertificate {
+			session.Observe(adapters.LogLevelDebug, a, "read-public-key", "using public key from slot certificate for %s", slot)
+		}
+		return description.PublicKey, nil
+	}
+	if description.CertError != nil {
+		return nil, description.CertError
+	}
+	// Retain the established missing-template error for an empty object.
+	return piv.ParsePublicKeyObject(data)
 }
 
 // DeleteKey removes a private key from a YubiKey slot.

@@ -22,12 +22,13 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 
 	session.Observe(adapters.LogLevelDebug, a, "describe-slot", "reading YubiKey slot metadata for %s", slot)
 	metadata, metaErr := readSlotMetadata(session.Client, slot)
-	metadataUnsupported := iso7816.IsStatus(metaErr, iso7816.SwInsNotSupported) || iso7816.IsStatus(metaErr, iso7816.SwClaNotSupported)
+	metadataUnsupported := isMetadataUnsupported(metaErr)
 	switch {
 	case metaErr == nil && metadata.PublicKey != nil:
 		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "using YubiKey metadata to mark public key presence for %s", slot)
 		description.SetKeyState(adapters.SlotStatePresent, nil)
 		description.PublicKey = metadata.PublicKey
+		description.PublicKeySource = adapters.PublicKeySourceMetadata
 		description.KeyAlgorithm = adapterslots.PublicKeyAlgorithmName(metadata.PublicKey)
 	case metaErr == nil:
 		// A successful slot metadata response establishes a key even when
@@ -39,9 +40,8 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 		description.SetKeyState(adapters.SlotStateAbsent, nil)
 	default:
 		if metadataUnsupported {
-			// NEO cannot report private-key metadata. A readable public
-			// object remains useful evidence; otherwise the private key is
-			// permanently unobservable through this passive read.
+			// NEO cannot report private-key metadata. Public storage remains
+			// useful, but cannot establish the current private-key state.
 			if description.KeyState == adapters.SlotStateUnknown {
 				description.KeyUnknownReason = adapters.KeyUnknownReasonUnobservable
 			}
@@ -58,12 +58,8 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 		description.Metadata = &normalized
 	}
 
-	// Without slot metadata (for example YubiKey NEO) an empty key view is
-	// ambiguous: the certificate and the public key share one slot object,
-	// so a private key may exist while nothing is observable. Surface the
-	// guidance in the operation trace where blind-slot diagnosis happens.
-	if metadataUnsupported && !description.KeyPresent {
-		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "NEO shares certificate and public-key object without GET METADATA; re-import key or certificate to restore view for %s", slot)
+	if metadataUnsupported && description.KeyState == adapters.SlotStateUnknown {
+		session.Observe(adapters.LogLevelDebug, a, "describe-slot", "GET METADATA is unsupported; public storage cannot establish private-key presence for %s", slot)
 	}
 
 	return description, nil

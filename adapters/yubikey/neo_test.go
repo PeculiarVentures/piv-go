@@ -219,7 +219,7 @@ func TestNEODescribeSlotEmptyAfterCertDelete(t *testing.T) {
 	}
 	found := false
 	for _, line := range trace.EventLog() {
-		if strings.Contains(line, "NEO shares certificate and public-key object without GET METADATA") {
+		if strings.Contains(line, "public storage cannot establish private-key presence") {
 			found = true
 		}
 	}

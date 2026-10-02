@@ -157,6 +157,32 @@ fmt.Printf("signature length: %d\n", len(signature))
 In a complete application, resolve `runtime` through the adapter layer after connecting to the card, compute `digest` from the message you want to sign, and source `pin` from your own credential-handling path rather than from a command
 line argument.
 
+## Passive slot inspection
+
+Use `adapters/slots.DescribeSlot` when an application needs both public-key
+provenance and private-key state. `SlotDescription.PublicKeySource` distinguishes
+`metadata`, `stored_template`, and `certificate`; it is empty when no public key
+was read. The CLI exposes the same value as `public_key_source` in JSON and shows
+the public algorithm and source alongside the private-key state in text output.
+
+A saved public template or certificate cannot prove that the corresponding
+private key is still on the card. Without authoritative vendor metadata,
+`KeyState` stays `unknown` with reason `unobservable`, even when a public key and
+its algorithm are available. Read failures remain errors. `ReadPublicKey` keeps
+its existing return type; callers requiring this distinction should inspect the
+slot description instead.
+
+The CLI's existing unknown-state guard also refuses `key delete` on cards
+whose private-key presence cannot be established from metadata. A saved public
+template alone does not authorize that operation.
+
+YubiKey generation and import still save a public template for later reads.
+Installing a certificate replaces that template in the shared slot object.
+Changing a private key through another tool can leave a saved template stale.
+On YubiKey NEO, unsupported `GET METADATA` permits public-object and PIN status
+fallbacks. PUK retries can remain unknown, while management-key retries are
+unlimited. Real metadata read or parse failures are returned as errors.
+
 ## Security and operational caveats
 
 - Real hardware operations can be destructive. Review `setup`, `mgm`, `key delete`, `key generate`, and `cert delete` commands before using them on a live token.

@@ -18,7 +18,8 @@ func (a *Adapter) PINStatus(session *adapters.Session, pinType piv.PINType) (ada
 	}
 
 	session.Observe(adapters.LogLevelDebug, a, "read-pin-status", "reading YubiKey PIN metadata for %v", pinType)
-	if metadata, err := readPINMetadata(session.Client, pinType); err == nil {
+	metadata, metadataErr := readPINMetadata(session.Client, pinType)
+	if metadataErr == nil {
 		session.Observe(adapters.LogLevelDebug, a, "read-pin-status", "using YubiKey PIN metadata for %v", pinType)
 		return adapters.PINStatus{
 			Type:        pinType,
@@ -26,6 +27,9 @@ func (a *Adapter) PINStatus(session *adapters.Session, pinType piv.PINType) (ada
 			MaxRetries:  metadata.TotalAttempts,
 			Blocked:     metadata.AttemptsRemaining == 0,
 		}, nil
+	}
+	if !isMetadataUnsupported(metadataErr) {
+		return adapters.PINStatus{}, fmt.Errorf("yubikey: read PIN metadata: %w", metadataErr)
 	}
 
 	session.Observe(adapters.LogLevelDebug, a, "read-pin-status", "falling back to standard PIV PIN status for %v", pinType)

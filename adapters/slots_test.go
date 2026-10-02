@@ -35,11 +35,15 @@ func TestDescribeSlotUsesStandardPIVObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !description.KeyPresent || description.KeyAlgorithm != "eccp256" {
+	if description.KeyState != adaptercore.SlotStateUnknown || description.KeyUnknownReason != adaptercore.KeyUnknownReasonUnobservable || description.KeyAlgorithm != "eccp256" || description.PublicKeySource != adaptercore.PublicKeySourceStoredTemplate {
 		t.Fatalf("unexpected key description: %+v", description)
 	}
 	if description.PublicKey == nil {
 		t.Fatalf("successful key read must expose the parsed public key: %+v", description)
+	}
+	key := description.PublicKey.(*ecdsa.PublicKey)
+	if key.X.Cmp(elliptic.P256().Params().Gx) != 0 || key.Y.Cmp(elliptic.P256().Params().Gy) != 0 {
+		t.Fatal("stored template must take precedence over the different certificate key")
 	}
 	if description.KeyError != nil {
 		t.Fatalf("successful key read must not carry an error: %v", description.KeyError)
@@ -227,7 +231,7 @@ func TestDescribeSlotGeneratedPublicKeyWithoutCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adaptercore.SlotStatePresent || d.CertState != adaptercore.SlotStateAbsent || d.CertError != nil || d.PublicKey == nil {
+	if d.KeyState != adaptercore.SlotStateUnknown || d.KeyUnknownReason != adaptercore.KeyUnknownReasonUnobservable || d.PublicKeySource != adaptercore.PublicKeySourceStoredTemplate || d.CertState != adaptercore.SlotStateAbsent || d.CertError != nil || d.PublicKey == nil {
 		t.Fatalf("generated key without certificate: %+v", d)
 	}
 	if len(readCard.TransmittedCommands) != 1 {
@@ -238,14 +242,14 @@ func TestDescribeSlotGeneratedPublicKeyWithoutCertificate(t *testing.T) {
 func TestDescribeSlotCertificateOnlyAndEmptyObject(t *testing.T) {
 	certDER := mustCreateTestCertificate(t)
 	for _, tc := range []struct {
-		name      string
-		object    []byte
-		keyState  adaptercore.SlotState
-		certState adaptercore.SlotState
-		publicKey bool
+		name            string
+		object          []byte
+		keyState        adaptercore.SlotState
+		certState       adaptercore.SlotState
+		publicKeySource adaptercore.PublicKeySource
 	}{
-		{"certificate only", iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x70, certDER)), adaptercore.SlotStateUnknown, adaptercore.SlotStatePresent, true},
-		{"empty 53", iso7816.EncodeTLV(0x53, nil), adaptercore.SlotStateUnknown, adaptercore.SlotStateAbsent, false},
+		{"certificate only", iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x70, certDER)), adaptercore.SlotStateUnknown, adaptercore.SlotStatePresent, adaptercore.PublicKeySourceCertificate},
+		{"empty 53", iso7816.EncodeTLV(0x53, nil), adaptercore.SlotStateUnknown, adaptercore.SlotStateAbsent, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			card := emulator.NewCard()
@@ -254,7 +258,7 @@ func TestDescribeSlotCertificateOnlyAndEmptyObject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if d.KeyState != tc.keyState || d.CertState != tc.certState || (d.PublicKey != nil) != tc.publicKey || d.KeyUnknownReason != adaptercore.KeyUnknownReasonUnobservable {
+			if d.KeyState != tc.keyState || d.CertState != tc.certState || (d.PublicKey != nil) != (tc.publicKeySource != "") || d.PublicKeySource != tc.publicKeySource || d.KeyUnknownReason != adaptercore.KeyUnknownReasonUnobservable {
 				t.Fatalf("unexpected slot description: %+v", d)
 			}
 			if len(card.TransmittedCommands) != 1 {
@@ -276,7 +280,7 @@ func TestDescribeSlotMLDSACertificateOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, ok := d.PublicKey.(*piv.OpaquePublicKey)
-	if d.KeyState != adaptercore.SlotStateUnknown || d.CertState != adaptercore.SlotStatePresent || !ok || key.Algorithm != piv.AlgMLDSA44 || d.KeyAlgorithm != "mldsa44" {
+	if d.KeyState != adaptercore.SlotStateUnknown || d.CertState != adaptercore.SlotStatePresent || d.PublicKeySource != adaptercore.PublicKeySourceCertificate || !ok || key.Algorithm != piv.AlgMLDSA44 || d.KeyAlgorithm != "mldsa44" {
 		t.Fatalf("ML-DSA certificate must expose opaque public key without proving private key: %+v", d)
 	}
 	if !bytes.Equal(d.CertDER, der) || len(card.TransmittedCommands) != 1 {
@@ -297,6 +301,32 @@ func TestDescribeSlotPreservesCertificatePayloadForCompressedInfo(t *testing.T) 
 	}
 	if d.CertState != adaptercore.SlotStateError || !bytes.Equal(d.CertDER, compressed) {
 		t.Fatalf("compressed tag 70 must remain raw and unparsed: %+v", d)
+	}
+}
+
+func TestDescribeSlotKeepsIndependentPublicObservationsOnParseError(t *testing.T) {
+	cert := iso7816.EncodeTLV(0x70, mustCreateTestCertificate(t))
+	key := iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)))
+	for _, tc := range []struct {
+		name      string
+		inner     []byte
+		keyState  adaptercore.SlotState
+		certState adaptercore.SlotState
+		source    adaptercore.PublicKeySource
+	}{
+		{"invalid template with valid certificate", append(iso7816.EncodeTLV(0x7F49, []byte{0x86}), cert...), adaptercore.SlotStateError, adaptercore.SlotStatePresent, adaptercore.PublicKeySourceCertificate},
+		{"valid template with invalid certificate", append(key, iso7816.EncodeTLV(0x70, []byte{0x01})...), adaptercore.SlotStateUnknown, adaptercore.SlotStateError, adaptercore.PublicKeySourceStoredTemplate},
+		{"invalid template only", iso7816.EncodeTLV(0x7F49, []byte{0x86}), adaptercore.SlotStateError, adaptercore.SlotStateAbsent, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := adapterslots.DescribeDataObject(iso7816.EncodeTLV(0x53, tc.inner), nil)
+			if d.KeyState != tc.keyState || d.CertState != tc.certState || d.PublicKeySource != tc.source || (d.PublicKey != nil) != (tc.source != "") {
+				t.Fatalf("independent object observations lost: %+v", d)
+			}
+			if (d.KeyError != nil) != (tc.keyState == adaptercore.SlotStateError) || (d.CertError != nil) != (tc.certState == adaptercore.SlotStateError) {
+				t.Fatalf("parse error lost: %+v", d)
+			}
+		})
 	}
 }
 

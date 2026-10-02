@@ -6,15 +6,7 @@ import (
 	"github.com/PeculiarVentures/piv-go/piv"
 )
 
-// SlotDescription summarizes the observable state of a PIV slot.
-//
-// One DescribeSlot call reads each physical data object at most once, so all
-// fields describe a single pass over the slot.
-// Read and parse failures are exposed through the matching *Error field with
-// the successful values kept alongside them instead of being swallowed.
-// KeyState describes the adapter's evidence of a private key. Standard PIV
-// GET DATA exposes public storage only, so a missing object cannot establish
-// private-key absence. PublicKey can be known while KeyState is unknown.
+// SlotState describes presence, absence, an unobservable state, or a read error.
 type SlotState string
 
 const (
@@ -35,13 +27,33 @@ const (
 	KeyUnknownReasonUnobservable KeyUnknownReason = "unobservable"
 )
 
+// PublicKeySource identifies the object from which a public key was read.
+// Stored templates and certificates are writable public copies and may not
+// match the private key currently occupying the slot.
+type PublicKeySource string
+
+const (
+	PublicKeySourceMetadata       PublicKeySource = "metadata"
+	PublicKeySourceStoredTemplate PublicKeySource = "stored_template"
+	PublicKeySourceCertificate    PublicKeySource = "certificate"
+)
+
+// SlotDescription summarizes the observable state of a PIV slot.
+//
+// One DescribeSlot call reads each physical data object at most once, so all
+// fields describe a single pass over the slot. Read and parse failures are
+// exposed through the matching *Error field alongside successful values.
+// KeyState describes the adapter's evidence of a private key. Standard PIV
+// GET DATA exposes public storage only, so neither a readable nor a missing
+// object establishes private-key presence or absence. PublicKey can be known
+// while KeyState is unknown.
 type SlotDescription struct {
 	KeyState   SlotState
 	KeyPresent bool
 	// KeyUnknownReason describes a successful but private-key-blind read.
 	// It is empty for known states and read or parse errors.
 	KeyUnknownReason KeyUnknownReason
-	// KeyUnknown reports that private-key absence could not be confirmed.
+	// KeyUnknown reports that private-key presence or absence is unknown.
 	// GET DATA not-found and empty objects are unknown without authoritative
 	// vendor metadata, as are ambiguous read failures.
 	// Deletion success is confirmed separately by the delete operation.
@@ -50,11 +62,14 @@ type SlotDescription struct {
 	// KeyError carries the error that prevented interpretation of a key read.
 	// It is nil for an unevidenced private key with otherwise valid storage.
 	KeyError error
-	// PublicKey is the parsed public key when the key read succeeded.
-	PublicKey   crypto.PublicKey
-	CertState   SlotState
-	CertPresent bool
-	CertLabel   string
+	// PublicKey is the parsed public material, independent of private-key state.
+	PublicKey crypto.PublicKey
+	// PublicKeySource is empty when no public key could be read. Callers must
+	// inspect KeyState separately before asserting private-key presence.
+	PublicKeySource PublicKeySource
+	CertState       SlotState
+	CertPresent     bool
+	CertLabel       string
 	// CertUnknown reports that certificate absence could not be confirmed:
 	// the certificate read failed with an ambiguous error rather than a
 	// definitive not-found status. CertError carries that error.

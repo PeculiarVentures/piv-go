@@ -138,7 +138,7 @@ func TestDescribeSlotFallsBackToMirrorCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !description.KeyPresent || description.KeyAlgorithm != "eccp256" {
+	if description.KeyState != adapters.SlotStateUnknown || description.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || description.KeyAlgorithm != "eccp256" || description.PublicKeySource != adapters.PublicKeySourceStoredTemplate {
 		t.Fatalf("unexpected key description: %+v", description)
 	}
 	if !description.CertPresent || description.CertLabel != "CN=SafeNet Slot" {
@@ -175,11 +175,43 @@ func TestDescribeSlotReadsStandardAndMirrorOnceEach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.KeyState != adapters.SlotStateUnknown || d.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil {
+	if d.KeyState != adapters.SlotStateUnknown || d.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || d.CertState != adapters.SlotStatePresent || d.PublicKey == nil || d.PublicKeySource != adapters.PublicKeySourceCertificate {
 		t.Fatalf("certificate-only mirror must not prove private key: %+v", d)
 	}
 	if reads[standardTag] != 1 || reads[mirrorTag] != 1 {
 		t.Fatalf("GET DATA reads = %v, want one per physical object", reads)
+	}
+}
+
+func TestDescribeSlotMirrorTemplateOverridesCertificateWithoutProvingPrivateKey(t *testing.T) {
+	card := emulator.NewCard()
+	card.EnqueueResponse(0xCB, buildCertificateObject(mustCreateSafeNetTestCertificate(t)), iso7816.SwSuccess)
+	point := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)
+	card.EnqueueResponse(0xCB, iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point))), iso7816.SwSuccess)
+	d, err := NewAdapter().DescribeSlot(&adapters.Session{Client: piv.NewClient(card)}, piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStateUnknown || d.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || d.PublicKeySource != adapters.PublicKeySourceStoredTemplate || d.CertState != adapters.SlotStatePresent {
+		t.Fatalf("mirror template must retain provenance without private-key proof: %+v", d)
+	}
+	key := d.PublicKey.(*ecdsa.PublicKey)
+	if key.X.Cmp(elliptic.P256().Params().Gx) != 0 || key.Y.Cmp(elliptic.P256().Params().Gy) != 0 {
+		t.Fatal("mirror template must take precedence over standard certificate key")
+	}
+}
+
+func TestDescribeSlotMirrorKeyDoesNotHideStandardReadError(t *testing.T) {
+	card := emulator.NewCard()
+	card.EnqueueResponse(0xCB, nil, iso7816.SwSecurityNotSatisfied)
+	point := internalutil.MustEncodeUncompressedPoint(elliptic.P256(), elliptic.P256().Params().Gx, elliptic.P256().Params().Gy)
+	card.EnqueueResponse(0xCB, iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x7F49, iso7816.EncodeTLV(0x86, point))), iso7816.SwSuccess)
+	d, err := NewAdapter().DescribeSlot(&adapters.Session{Client: piv.NewClient(card)}, piv.SlotAuthentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.KeyState != adapters.SlotStateError || !iso7816.IsStatus(d.KeyError, iso7816.SwSecurityNotSatisfied) || d.PublicKeySource != adapters.PublicKeySourceStoredTemplate || d.PublicKey == nil {
+		t.Fatalf("read error must survive alongside mirror public material: %+v", d)
 	}
 }
 
