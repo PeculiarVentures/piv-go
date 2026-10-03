@@ -157,6 +157,30 @@ fmt.Printf("signature length: %d\n", len(signature))
 In a complete application, resolve `runtime` through the adapter layer after connecting to the card, compute `digest` from the message you want to sign, and source `pin` from your own credential-handling path rather than from a command
 line argument.
 
+## PIV secure messaging
+
+`piv.OpenSecureMessaging` opens SP 800-73-4 Part 2 secure messaging with a card that supports it, with cipher suite 27 (P-256, AES-128) or 2E (P-384, AES-256). The card proves its key with a card verifiable certificate (CVC), and the client checks that CVC against the content signing certificate in the card's Secure Messaging Certificate Signer object (5FC122), whose path it validates to the roots you give it. The returned channel is a `piv.Card`, so a client built on it sends every command encrypted and MAC-protected. Over secure messaging, `VerifyPairingCode` activates the virtual contact interface, which lets a contactless reader do what a contact reader can.
+
+```go
+client := piv.NewClient(card)
+if err := client.Select(); err != nil {
+	return err
+}
+ch, err := piv.OpenSecureMessaging(card, piv.SecureMessagingOptions{Roots: orgRoots})
+if err != nil {
+	return err // the card's CVC does not chain to orgRoots, or key establishment failed
+}
+sm := piv.NewClient(ch)
+if err := sm.VerifyPairingCode("12345678"); err != nil {
+	return err
+}
+if err := sm.VerifyPIN(pin); err != nil {
+	return err
+}
+```
+
+Any failure ends the session, as does a SELECT, which the channel refuses to send. Command chaining is not supported under secure messaging; a long command goes as one extended APDU. The implementation follows OpenSC's `card-piv.c`. Its tests replay a recorded session with goodpiv, a card that implements secure messaging and is itself tested against OpenSC.
+
 ## Passive slot inspection
 
 Use `adapters/slots.DescribeSlot` when an application needs both public-key
