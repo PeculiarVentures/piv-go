@@ -6,8 +6,8 @@ import (
 	"github.com/PeculiarVentures/piv-go/piv"
 )
 
-// PINStatus reads PIV reference retry status from SafeNet-specific card status TLV.
-// SafeNet reports PIN/PUK retries in vendor-specific response TLV (tags 9A/9B) rather than standard VERIFY status.
+// PINStatus reads PIN/PUK retry status from the SafeNet credential metadata
+// objects FF8180/FF8181. Tag 9A is the configured limit and 9B is the remaining count.
 func (a *Adapter) PINStatus(session *adapters.Session, pinType piv.PINType) (adapters.PINStatus, error) {
 	if err := requireSessionClient(session); err != nil {
 		return adapters.PINStatus{}, err
@@ -25,65 +25,35 @@ func (a *Adapter) safeNetPINStatus(session *adapters.Session, pinType piv.PINTyp
 		return adapters.PINStatus{}, false, err
 	}
 
-	query := []byte{0x4D, 0x03, 0xFF, 0x81, 0x80, 0x00}
-	status, found, err := a.safeNetPINStatusFromQuery(session.Client, pinType, query)
-	if err == nil && found {
-		return status, true, nil
-	}
-
-	query = []byte{0x4D, 0x03, 0xFF, 0x84, 0x0B, 0x00}
-	return a.safeNetPINStatusFromQuery(session.Client, pinType, query)
-}
-
-func (a *Adapter) safeNetPINStatusFromQuery(client *piv.Client, pinType piv.PINType, query []byte) (adapters.PINStatus, bool, error) {
-	cmd := &iso7816.Command{
-		Cla:  0x81,
-		Ins:  0xCB,
-		P1:   0x3F,
-		P2:   0xFF,
-		Data: query,
-		Le:   -1,
-	}
-	resp, err := client.Execute(cmd)
-	if err != nil {
-		return adapters.PINStatus{}, false, err
-	}
-	if err := resp.Err(); err != nil {
-		return adapters.PINStatus{}, false, err
-	}
-
-	tlvs, err := iso7816.ParseAllTLV(resp.Data)
-	if err != nil {
-		return adapters.PINStatus{}, false, err
-	}
-
-	tag := uint(0x9B)
-	if pinType == piv.PINTypePUK {
-		tag = 0x9A
-	}
-
-	retries, ok := findRecursiveTLVValue(tlvs, tag)
-	if !ok {
+	var tag uint
+	switch pinType {
+	case piv.PINTypeCard:
+		tag = 0xFF8180
+	case piv.PINTypePUK:
+		tag = 0xFF8181
+	default:
 		return adapters.PINStatus{}, false, nil
 	}
-
-	return adapters.PINStatus{Type: pinType, RetriesLeft: retries, MaxRetries: adapters.UnknownRetries, Blocked: retries == 0}, true, nil
-}
-
-func findRecursiveTLVValue(tlvs []*iso7816.TLV, tag uint) (int, bool) {
-	for _, tlv := range tlvs {
-		if tlv.Tag == tag && len(tlv.Value) > 0 {
-			return int(tlv.Value[0]), true
-		}
-		inner, err := iso7816.ParseAllTLV(tlv.Value)
-		if err != nil {
-			continue
-		}
-		if retries, ok := findRecursiveTLVValue(inner, tag); ok {
-			return retries, true
-		}
+	data, err := getMetadata(session.Client, tag)
+	if err != nil {
+		return adapters.PINStatus{}, false, err
 	}
-	return 0, false
+
+	tlvs, err := iso7816.ParseAllTLV(data)
+	if err != nil {
+		return adapters.PINStatus{}, false, err
+	}
+
+	remaining := findRecursiveTLV(tlvs, 0x9B)
+	if remaining == nil || len(remaining.Value) != 1 {
+		return adapters.PINStatus{}, false, nil
+	}
+	maximum := adapters.UnknownRetries
+	if limit := findRecursiveTLV(tlvs, 0x9A); limit != nil && len(limit.Value) == 1 {
+		maximum = int(limit.Value[0])
+	}
+	retries := int(remaining.Value[0])
+	return adapters.PINStatus{Type: pinType, RetriesLeft: retries, MaxRetries: maximum, Blocked: retries == 0}, true, nil
 }
 
 // ChangePIN uses the standard CHANGE REFERENCE DATA command on SafeNet tokens.

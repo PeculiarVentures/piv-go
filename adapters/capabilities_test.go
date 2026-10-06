@@ -40,6 +40,9 @@ func TestSafeNetCapabilitiesOverrideDefaults(t *testing.T) {
 	if capabilityByID(report, adapters.CapabilityChangePIN).Support != adapters.CapabilityStandard {
 		t.Fatal("SafeNet change-pin should remain standard")
 	}
+	if capabilityByID(report, adapters.CapabilityPINStatus).Support != adapters.CapabilityVendor {
+		t.Fatal("SafeNet pin-status should be vendor-backed")
+	}
 	if capabilityByID(report, adapters.CapabilityPUKStatus).Support != adapters.CapabilityVendor {
 		t.Fatal("SafeNet puk-status should be vendor-backed")
 	}

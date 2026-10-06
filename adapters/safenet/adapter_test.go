@@ -80,30 +80,6 @@ func TestMatchReader(t *testing.T) {
 	}
 }
 
-func TestSafeNetAdapterPINStatusFromTLV(t *testing.T) {
-	mock := emulator.NewCard()
-	mock.SetResponse(0xCB, []byte{0x9A, 0x01, 0x05, 0x9B, 0x01, 0x03}, 0x9000)
-
-	session := &adapters.Session{Client: piv.NewClient(mock), ReaderName: "SafeNet eToken Fusion"}
-	adpt := NewAdapter()
-
-	status, err := adapteradmin.ReadPINStatus(adapters.NewRuntime(session, adpt), piv.PINTypePUK)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status.RetriesLeft != 5 {
-		t.Fatalf("wrong PUK retries: %+v", status)
-	}
-
-	status, err = adapteradmin.ReadPINStatus(adapters.NewRuntime(session, adpt), piv.PINTypeCard)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status.RetriesLeft != 3 {
-		t.Fatalf("wrong PIN retries: %+v", status)
-	}
-}
-
 func TestSafeNetAdapterManagementKeyStatusFromTLV(t *testing.T) {
 	mock := emulator.NewCard()
 	mock.SetSuccessResponse(0xA4, nil)
