@@ -99,6 +99,18 @@ Treat these commands as state-changing operations:
 - `setup reset`
 - `setup reset-slot`
 
+`setup reset` follows the selected provider's reset procedure. For YubiKey
+(including NEO), it blocks PIN and PUK before resetting the PIV application to
+factory defaults. Bio MPE is rejected before credential blocking because it
+requires device-wide reset. Read-only preflight checks both PIN and PUK metadata;
+unexpected read errors stop before any credential-blocking attempts. A verified
+PIN with an unknown retry count is probed rather than treated as blocked.
+SafeNet uses its own reset procedure with the current
+management key and PUK; it does not run the YubiKey credential-blocking flow.
+`setup reset --dry-run` does not block credentials or reset either provider.
+Token reset and slot reset are separate adapter capabilities; YubiKey token
+reset does not enable SafeNet's slot reset behavior for YubiKey.
+
 YubiKey slot policies: `key generate` and `key import` accept
 `--pin-policy never|once|always` and `--touch-policy never|always|cached`
 (default omits the policy tags, so the device applies its own defaults instead
