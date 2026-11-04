@@ -78,14 +78,26 @@ type PINRecoveryAdapter interface {
 	UnblockPIN(session *Session, puk string, newPIN string) error
 }
 
-// ResetAdapter exposes destructive reset operations.
-type ResetAdapter interface {
+// SlotResetAdapter exposes vendor-specific slot reset independently of token reset.
+type SlotResetAdapter interface {
 	// ResetSlot clears vendor-specific state associated with a slot.
 	ResetSlot(session *Session, slot piv.Slot) error
+}
+
+// TokenResetAdapter exposes token reset policy and execution. A provider need
+// not support individual slot reset to supply its own token reset procedure.
+type TokenResetAdapter interface {
 	// DescribeReset returns the reset policy requirements for the token.
 	DescribeReset(session *Session) (ResetRequirements, error)
 	// ResetToken resets the selected PIV application using adapter-specific parameters.
 	ResetToken(session *Session, params ResetTokenParams) error
+}
+
+// ResetAdapter combines both reset capabilities for providers supporting them.
+// Kept for compatibility; dispatch checks each capability independently.
+type ResetAdapter interface {
+	SlotResetAdapter
+	TokenResetAdapter
 }
 
 // ResetRequirements describes the policy requirements for a token reset flow.

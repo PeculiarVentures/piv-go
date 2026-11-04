@@ -702,10 +702,15 @@ func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing
 		ManagementKey:       []byte{0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01},
 	}
 
-	if err := NewAdapter().ResetToken(session, adapters.ResetTokenParams{PUK: defaultPUK}); err != nil {
+	if err := adapteradmin.ResetToken(adapters.NewRuntime(session, NewAdapter()), adapters.ResetTokenParams{PUK: defaultPUK}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	for _, command := range mock.TransmittedCommands {
+		if len(command) > 1 && (command[1] == 0xFB || (command[1] == 0x20 && len(command) > 5)) {
+			t.Fatalf("SafeNet reset must not use YubiKey RESET or PIN-blocking flow: %X", command)
+		}
+	}
 	putData := make(map[uint][][]byte)
 	for _, command := range mock.TransmittedCommands {
 		if len(command) < 9 || command[1] != 0xDB {

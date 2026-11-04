@@ -172,7 +172,7 @@ func resetSlot(session *adapters.Session, adapter adapters.Adapter, slot piv.Slo
 	if err := requireSessionClient(session); err != nil {
 		return err
 	}
-	resetAdapter, ok := adapter.(adapters.ResetAdapter)
+	resetAdapter, ok := adapter.(adapters.SlotResetAdapter)
 	if !ok {
 		session.Observe(adapters.LogLevelInfo, adapter, "reset-slot", "adapter does not implement slot reset")
 		return fmt.Errorf("adapters: slot reset is not supported")
@@ -191,7 +191,7 @@ func DescribeReset(runtime *adapters.Runtime) (adapters.ResetRequirements, error
 		return adapters.ResetRequirements{}, adapters.ErrUnsupportedToken
 	}
 
-	resetAdapter, ok := runtime.Adapter.(adapters.ResetAdapter)
+	resetAdapter, ok := runtime.Adapter.(adapters.TokenResetAdapter)
 	if !ok {
 		runtime.Session.Observe(adapters.LogLevelDebug, runtime.Adapter, "describe-reset", "adapter has no custom reset requirements")
 		return adapters.ResetRequirements{}, nil
@@ -214,7 +214,7 @@ func resetToken(session *adapters.Session, adapter adapters.Adapter, params adap
 	if err := requireSessionClient(session); err != nil {
 		return err
 	}
-	if resetAdapter, ok := adapter.(adapters.ResetAdapter); ok {
+	if resetAdapter, ok := adapter.(adapters.TokenResetAdapter); ok {
 		session.Observe(adapters.LogLevelInfo, adapter, "reset-token", "delegating token reset to adapter")
 		return resetAdapter.ResetToken(session, params)
 	}
