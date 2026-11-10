@@ -2,15 +2,20 @@ package safenet
 
 import (
 	"bytes"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
 	"github.com/PeculiarVentures/piv-go/emulator"
+	"github.com/PeculiarVentures/piv-go/internal/testtrace"
 	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
 
-func TestDescribeSlotMissingCardAuthMirrorDoesNotProvePrivateKeyAbsence(t *testing.T) {
+func TestDescribeSlotMissingPublicObjectsDoNotProvePrivateKeyAbsence(t *testing.T) {
 	certificate := mustCreateSafeNetTestCertificate(t)
 	for _, tc := range []struct {
 		name          string
@@ -24,8 +29,8 @@ func TestDescribeSlotMissingCardAuthMirrorDoesNotProvePrivateKeyAbsence(t *testi
 	}{
 		{name: "missing public objects", slot: piv.SlotCardAuth, standardSW: iso7816.SwFileNotFound, mirrorSW: iso7816.SwWrongData, wantKey: adapters.SlotStateUnknown, wantCert: adapters.SlotStateAbsent},
 		{name: "readable standard certificate", slot: piv.SlotCardAuth, standard: buildCertificateObject(certificate), standardSW: iso7816.SwSuccess, mirrorSW: iso7816.SwWrongData, wantKey: adapters.SlotStateUnknown, wantCert: adapters.SlotStatePresent},
-		{name: "other mirror wrong data", slot: piv.SlotAuthentication, standardSW: iso7816.SwFileNotFound, mirrorSW: iso7816.SwWrongData, wantKey: adapters.SlotStateError, wantCert: adapters.SlotStateError, wantReadError: true},
-		{name: "standard object wrong data", slot: piv.SlotCardAuth, standardSW: iso7816.SwWrongData, mirrorSW: iso7816.SwFileNotFound, wantKey: adapters.SlotStateError, wantCert: adapters.SlotStateError, wantReadError: true},
+		{name: "auth mirror wrong data", slot: piv.SlotAuthentication, standardSW: iso7816.SwFileNotFound, mirrorSW: iso7816.SwWrongData, wantKey: adapters.SlotStateUnknown, wantCert: adapters.SlotStateAbsent},
+		{name: "standard object wrong data", slot: piv.SlotCardAuth, standardSW: iso7816.SwWrongData, mirrorSW: iso7816.SwFileNotFound, wantKey: adapters.SlotStateUnknown, wantCert: adapters.SlotStateAbsent},
 		{name: "mirror security failure", slot: piv.SlotCardAuth, standardSW: iso7816.SwFileNotFound, mirrorSW: iso7816.SwSecurityNotSatisfied, wantKey: adapters.SlotStateError, wantCert: adapters.SlotStateError, wantReadError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,6 +58,104 @@ func TestDescribeSlotMissingCardAuthMirrorDoesNotProvePrivateKeyAbsence(t *testi
 			}
 		})
 	}
+}
+
+func TestReadPublicObjectNormalizesOnlyKnownSafeNetPublicTags(t *testing.T) {
+	for _, tc := range []struct {
+		tag       uint
+		normalize bool
+	}{
+		{tag: 0x5FC105, normalize: true},
+		{tag: 0x5FC10A, normalize: true},
+		{tag: 0x5FC10B, normalize: true},
+		{tag: 0x5FC101, normalize: true},
+		{tag: 0xFFF305, normalize: true},
+		{tag: 0xFFF30A, normalize: true},
+		{tag: 0xFFF30B, normalize: true},
+		{tag: 0xFFF301, normalize: true},
+		{tag: 0xFFF302, normalize: true},
+		{tag: 0x5FC102},
+		{tag: 0x5FC107},
+		{tag: 0x5FC10D},
+		{tag: 0xFFF30D},
+		{tag: 0xFFF310},
+		{tag: 0xFFF303},
+		{tag: 0xFF900A},
+		{tag: 0xFF900C},
+		{tag: 0xFF900D},
+		{tag: 0xFF900E},
+	} {
+		for _, status := range []uint16{iso7816.SwWrongData, iso7816.SwSecurityNotSatisfied, iso7816.SwUnknown} {
+			t.Run(fmt.Sprintf("%X/%04X", tc.tag, status), func(t *testing.T) {
+				card := emulator.NewCard()
+				card.SetResponse(0xCB, nil, status)
+				client := piv.NewClient(card)
+				_, err := readPublicObject(client, tc.tag)
+				wantStatus := status
+				if tc.normalize && status == iso7816.SwWrongData {
+					wantStatus = iso7816.SwFileNotFound
+				}
+				if !iso7816.IsStatus(err, wantStatus) {
+					t.Fatalf("read public object error = %v, want status %04X", err, wantStatus)
+				}
+				_, rawErr := client.GetData(tc.tag)
+				if !iso7816.IsStatus(rawErr, status) {
+					t.Fatalf("raw GET DATA error = %v, want original status %04X", rawErr, status)
+				}
+			})
+		}
+	}
+}
+
+func TestDescribeSlotsMatchesSafeNetFusionPublicReadTrace(t *testing.T) {
+	trace, err := os.ReadFile("testdata/read_public_slots_apdu_trace.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := emulator.NewCard()
+	var keyObject []byte
+	for _, line := range emulator.ExtractTraceLines(string(trace)) {
+		if !strings.HasPrefix(line, "APDU <- ") {
+			continue
+		}
+		raw, err := hex.DecodeString(strings.ReplaceAll(strings.TrimPrefix(line, "APDU <- "), " ", ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := iso7816.ParseResponse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		card.EnqueueResponse(0xCB, response.Data, response.StatusWord())
+		if keyObject == nil {
+			keyObject = response.Data
+		}
+	}
+	wantKey, err := piv.ParsePublicKeyObject(keyObject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := adapters.NewSession(piv.NewClient(card))
+	for _, slot := range []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth} {
+		description, err := NewAdapter().DescribeSlot(session, slot)
+		if err != nil || description.KeyError != nil || description.CertError != nil {
+			t.Fatalf("slot %s inspection failed: %+v, %v", slot, description, err)
+		}
+		if description.KeyState != adapters.SlotStateUnknown || description.KeyUnknownReason != adapters.KeyUnknownReasonUnobservable || description.KeyPresent {
+			t.Fatalf("slot %s public storage must leave private-key presence unknown: %+v", slot, description)
+		}
+		if description.CertState != adapters.SlotStateAbsent || description.CertPresent || len(description.CertDER) != 0 {
+			t.Fatalf("slot %s must have no readable certificate: %+v", slot, description)
+		}
+		if slot == piv.SlotAuthentication {
+			if description.PublicKey == nil || !publicKeysEqual(description.PublicKey, wantKey) || description.PublicKeySource != adapters.PublicKeySourceStoredTemplate || description.KeyAlgorithm != "eccp256" {
+				t.Fatalf("slot 9A stored P-256 template was lost: %+v", description)
+			}
+		} else if description.PublicKey != nil || description.PublicKeySource != "" {
+			t.Fatalf("slot %s unexpectedly has public material: %+v", slot, description)
+		}
+	}
+	testtrace.RequireMatchFile(t, "testdata/read_public_slots_apdu_trace.txt", card.APDULog())
 }
 
 func TestCHUIDMissingAliasWrongDataIsPublicObjectAbsence(t *testing.T) {

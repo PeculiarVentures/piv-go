@@ -29,6 +29,7 @@ func TestDirectReadersDistinguishEmptyPublicObjects(t *testing.T) {
 	}
 	empty := publicObjectReply{data: []byte{0x53, 0x00}, sw: iso7816.SwSuccess}
 	missing := publicObjectReply{sw: iso7816.SwFileNotFound}
+	wrongData := publicObjectReply{sw: iso7816.SwWrongData}
 	for _, slot := range []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth} {
 		for _, tc := range []struct {
 			name         string
@@ -41,6 +42,12 @@ func TestDirectReadersDistinguishEmptyPublicObjects(t *testing.T) {
 			{name: "empty standard", standard: empty, mirror: missing},
 			{name: "empty mirror", standard: missing, mirror: empty},
 			{name: "both empty", standard: empty, mirror: empty},
+			{name: "both missing wrong data", standard: wrongData, mirror: wrongData},
+			{name: "empty standard missing mirror wrong data", standard: empty, mirror: wrongData},
+			{name: "standard key missing mirror wrong data", standard: publicObjectReply{data: keyObject, sw: iso7816.SwSuccess}, mirror: wrongData, wantKey: true, wantTemplate: true},
+			{name: "mirror key missing standard wrong data", standard: wrongData, mirror: publicObjectReply{data: keyObject, sw: iso7816.SwSuccess}, wantKey: true, wantTemplate: true},
+			{name: "standard certificate missing mirror wrong data", standard: publicObjectReply{data: buildCertificateObject(certificate), sw: iso7816.SwSuccess}, mirror: wrongData, wantCert: true, wantKey: true},
+			{name: "mirror certificate missing standard wrong data", standard: wrongData, mirror: publicObjectReply{data: buildCertificateObject(certificate), sw: iso7816.SwSuccess}, wantCert: true, wantKey: true},
 			{name: "referenced data missing", standard: empty, mirror: publicObjectReply{sw: iso7816.SwReferencedDataNotFound}},
 			{name: "standard key only", standard: publicObjectReply{data: keyObject, sw: iso7816.SwSuccess}, mirror: missing, wantKey: true, wantTemplate: true},
 			{name: "mirror key only", standard: empty, mirror: publicObjectReply{data: keyObject, sw: iso7816.SwSuccess}, wantKey: true, wantTemplate: true},
@@ -95,22 +102,19 @@ func TestDirectReadersPreservePublicObjectFailuresForAllSlots(t *testing.T) {
 			reply publicObjectReply
 		}{
 			{name: "access denied", reply: publicObjectReply{sw: iso7816.SwSecurityNotSatisfied}},
-			{name: "wrong data", reply: publicObjectReply{sw: iso7816.SwWrongData}},
 			{name: "transport failure", reply: publicObjectReply{err: transportErr}},
 			{name: "malformed TLV", reply: publicObjectReply{data: []byte{0x53, 0x01, 0x70}, sw: iso7816.SwSuccess}},
 			{name: "unexpected tag", reply: publicObjectReply{data: iso7816.EncodeTLV(0x53, iso7816.EncodeTLV(0x42, nil)), sw: iso7816.SwSuccess}},
 			{name: "duplicate key template", reply: publicObjectReply{data: iso7816.EncodeTLV(0x53, []byte{0x7F, 0x49, 0x00, 0x7F, 0x49, 0x00}), sw: iso7816.SwSuccess}},
 		} {
 			for _, source := range []string{"standard", "mirror"} {
-				if source == "mirror" && slot == piv.SlotCardAuth && tc.reply.sw == iso7816.SwWrongData {
-					continue
-				}
 				for _, other := range []struct {
 					name  string
 					reply publicObjectReply
 				}{
 					{name: "other missing", reply: publicObjectReply{sw: iso7816.SwFileNotFound}},
 					{name: "other empty", reply: publicObjectReply{data: []byte{0x53, 0x00}, sw: iso7816.SwSuccess}},
+					{name: "other wrong data", reply: publicObjectReply{sw: iso7816.SwWrongData}},
 				} {
 					t.Run(slot.String()+"/"+source+"/"+tc.name+"/"+other.name, func(t *testing.T) {
 						standard, mirror := other.reply, other.reply

@@ -13,8 +13,12 @@ import (
 func readPublicObject(client *piv.Client, tag uint) ([]byte, error) {
 	data, err := client.GetData(tag)
 	// SafeNet uses 6A80 for these missing public objects, without proving private-key absence.
-	if (tag == safeNetCardAuthMirrorTag || tag == safeNetCHUIDAlias) && iso7816.IsStatus(err, iso7816.SwWrongData) {
-		return nil, fmt.Errorf("safenet: public object %X not found: %w", tag, iso7816.StatusError(iso7816.SwFileNotFound))
+	if iso7816.IsStatus(err, iso7816.SwWrongData) {
+		switch tag {
+		case piv.ObjectCertPIVAuth, piv.ObjectCertDigitalSig, piv.ObjectCertKeyMgmt, piv.ObjectCertCardAuth,
+			0xFFF305, 0xFFF30A, 0xFFF30B, safeNetCardAuthMirrorTag, safeNetCHUIDAlias:
+			return nil, fmt.Errorf("safenet: public object %X not found: %w", tag, iso7816.StatusError(iso7816.SwFileNotFound))
+		}
 	}
 	return data, err
 }
