@@ -96,7 +96,7 @@ func (s *safeNetInitializationEmulator) handleGetData(_ *emulator.Card, command 
 	if value, ok := s.objects[tag]; ok {
 		return emulator.BuildSuccessResponse(value), nil
 	}
-	if tag == safeNetCHUIDAlias || tag == safeNetCardAuthMirrorTag {
+	if safeNetAllowsWrongDataAsAbsence(tag) {
 		return emulator.BuildResponse(nil, uint16(iso7816.SwWrongData)), nil
 	}
 	return emulator.BuildResponse(nil, uint16(iso7816.SwFileNotFound)), nil

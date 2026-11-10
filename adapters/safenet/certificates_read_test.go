@@ -175,6 +175,63 @@ func TestDirectReadersMissingCardAuthMirrorWithEmptyStandard(t *testing.T) {
 	}
 }
 
+func TestReadCertificateAbsenceIsIndependentOfKeyTemplateError(t *testing.T) {
+	unreadable := publicObjectReply{data: []byte{0x53, 0x03, 0x7F, 0x49, 0x00}, sw: iso7816.SwSuccess}
+	missing := publicObjectReply{sw: iso7816.SwWrongData}
+	for _, slot := range []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth} {
+		for _, source := range []string{"standard", "mirror", "both"} {
+			t.Run(slot.String()+"/"+source, func(t *testing.T) {
+				standard, mirror := missing, missing
+				if source != "mirror" {
+					standard = unreadable
+				}
+				if source != "standard" {
+					mirror = unreadable
+				}
+				adapter := NewAdapter()
+				description, err := adapter.DescribeSlot(publicObjectSession(t, slot, standard, mirror), slot)
+				if err != nil || description.CertState != adapters.SlotStateAbsent || description.CertError != nil || description.KeyState != adapters.SlotStateError {
+					t.Fatalf("slot description = %+v, %v; want absent certificate and unreadable key", description, err)
+				}
+				certificate, err := adapter.ReadCertificate(publicObjectSession(t, slot, standard, mirror), slot)
+				if !isKeyNotFound(err) || len(certificate) != 0 {
+					t.Fatalf("certificate = %X, %v; want absence independent of key-template failure", certificate, err)
+				}
+				_, err = adapter.ReadPublicKey(publicObjectSession(t, slot, standard, mirror), slot)
+				var keyErr *piv.UnsupportedPublicKeyError
+				if !errors.As(err, &keyErr) || isKeyNotFound(err) {
+					t.Fatalf("public key error = %v; want preserved template failure", err)
+				}
+			})
+		}
+	}
+}
+
+func TestDirectReadersPreservePublicObjectErrorPrecedence(t *testing.T) {
+	for _, slot := range []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth} {
+		for _, tc := range []struct {
+			name       string
+			standardSW uint16
+			mirrorSW   uint16
+			wantSW     uint16
+		}{
+			{name: "mirror failure before standard failure", standardSW: iso7816.SwSecurityNotSatisfied, mirrorSW: iso7816.SwUnknown, wantSW: iso7816.SwUnknown},
+			{name: "standard failure before mirror absence", standardSW: iso7816.SwSecurityNotSatisfied, mirrorSW: iso7816.SwWrongData, wantSW: iso7816.SwSecurityNotSatisfied},
+			{name: "mirror failure before standard absence", standardSW: iso7816.SwWrongData, mirrorSW: iso7816.SwSecurityNotSatisfied, wantSW: iso7816.SwSecurityNotSatisfied},
+			{name: "mirror status when both absent", standardSW: iso7816.SwFileNotFound, mirrorSW: iso7816.SwReferencedDataNotFound, wantSW: iso7816.SwReferencedDataNotFound},
+		} {
+			t.Run(slot.String()+"/"+tc.name, func(t *testing.T) {
+				standard, mirror := publicObjectReply{sw: tc.standardSW}, publicObjectReply{sw: tc.mirrorSW}
+				_, certErr := NewAdapter().ReadCertificate(publicObjectSession(t, slot, standard, mirror), slot)
+				_, keyErr := NewAdapter().ReadPublicKey(publicObjectSession(t, slot, standard, mirror), slot)
+				if !iso7816.IsStatus(certErr, tc.wantSW) || !iso7816.IsStatus(keyErr, tc.wantSW) {
+					t.Fatalf("certificate error = %v, public key error = %v; want status %04X", certErr, keyErr, tc.wantSW)
+				}
+			})
+		}
+	}
+}
+
 type publicObjectReply struct {
 	data []byte
 	sw   uint16

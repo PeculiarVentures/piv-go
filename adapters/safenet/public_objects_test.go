@@ -2,6 +2,7 @@ package safenet
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -241,13 +242,38 @@ func TestDirectReadersPreserveStandardFailuresWithMissingCardAuthMirror(t *testi
 	}
 }
 
-func TestReadPublicKeyPreservesMalformedFallbackCertificate(t *testing.T) {
+func TestReadPublicKeyPreservesDERErrorAfterStandardObjectChanges(t *testing.T) {
+	standardTag, err := piv.ObjectIDForSlot(piv.SlotCardAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der := []byte{0x30, 0x01, 0x00}
+	_, wantErr := x509.ParseCertificate(der)
+	standardReads, mirrorReads := 0, 0
 	card := emulator.NewCard()
-	card.EnqueueResponse(0xCB, nil, iso7816.SwFileNotFound)
-	card.EnqueueResponse(0xCB, nil, iso7816.SwWrongData)
-	card.EnqueueResponse(0xCB, buildCertificateObject([]byte{0x30, 0x01, 0x00}), iso7816.SwSuccess)
-	_, err := NewAdapter().ReadPublicKey(adapters.NewSession(piv.NewClient(card)), piv.SlotCardAuth)
-	if err == nil || isKeyNotFound(err) {
-		t.Fatalf("malformed fallback certificate became public-object absence: %v", err)
+	card.RegisterINSHandler(0xCB, func(_ *emulator.Card, raw []byte) ([]byte, error) {
+		command, err := iso7816.ParseCommand(raw)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(command.Data, iso7816.EncodeTLV(0x5C, iso7816.EncodeTag(standardTag))) {
+			standardReads++
+			if standardReads == 1 {
+				return emulator.BuildResponse(nil, iso7816.SwFileNotFound), nil
+			}
+			return emulator.BuildSuccessResponse(buildCertificateObject(der)), nil
+		}
+		if bytes.Equal(command.Data, iso7816.EncodeTLV(0x5C, iso7816.EncodeTag(safeNetCardAuthMirrorTag))) {
+			mirrorReads++
+			return emulator.BuildResponse(nil, iso7816.SwWrongData), nil
+		}
+		return nil, fmt.Errorf("unexpected GET DATA: %X", command.Data)
+	})
+	_, err = NewAdapter().ReadPublicKey(adapters.NewSession(piv.NewClient(card)), piv.SlotCardAuth)
+	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("read error = %v, want changed object's DER error %v", err, wantErr)
+	}
+	if standardReads != 2 || mirrorReads != 1 {
+		t.Fatalf("standard/mirror reads = %d/%d, want initial standard read, mirror probe, and standard certificate fallback", standardReads, mirrorReads)
 	}
 }

@@ -7,8 +7,11 @@ import (
 )
 
 const (
-	safeNetCardAuthMirrorTag uint = 0xFFF301
-	safeNetCHUIDAlias        uint = 0xFFF302
+	safeNetAuthenticationMirrorTag uint = 0xFFF305
+	safeNetSignatureMirrorTag      uint = 0xFFF30A
+	safeNetKeyManagementMirrorTag  uint = 0xFFF30B
+	safeNetCardAuthMirrorTag       uint = 0xFFF301
+	safeNetCHUIDAlias              uint = 0xFFF302
 )
 
 var safeNetGenerationTagsBySlot = map[piv.Slot]uint{
@@ -19,10 +22,20 @@ var safeNetGenerationTagsBySlot = map[piv.Slot]uint{
 }
 
 var safeNetMirrorTagsBySlot = map[piv.Slot]uint{
-	piv.SlotAuthentication: 0xFFF305,
-	piv.SlotSignature:      0xFFF30A,
-	piv.SlotKeyManagement:  0xFFF30B,
+	piv.SlotAuthentication: safeNetAuthenticationMirrorTag,
+	piv.SlotSignature:      safeNetSignatureMirrorTag,
+	piv.SlotKeyManagement:  safeNetKeyManagementMirrorTag,
 	piv.SlotCardAuth:       safeNetCardAuthMirrorTag,
+}
+
+func safeNetAllowsWrongDataAsAbsence(tag uint) bool {
+	switch tag {
+	case piv.ObjectCertPIVAuth, piv.ObjectCertDigitalSig, piv.ObjectCertKeyMgmt, piv.ObjectCertCardAuth,
+		safeNetAuthenticationMirrorTag, safeNetSignatureMirrorTag, safeNetKeyManagementMirrorTag, safeNetCardAuthMirrorTag, safeNetCHUIDAlias:
+		return true
+	default:
+		return false
+	}
 }
 
 var safeNetKnownGenerationTags = []uint{

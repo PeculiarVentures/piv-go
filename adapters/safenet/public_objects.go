@@ -13,12 +13,8 @@ import (
 func readPublicObject(client *piv.Client, tag uint) ([]byte, error) {
 	data, err := client.GetData(tag)
 	// SafeNet uses 6A80 for these missing public objects, without proving private-key absence.
-	if iso7816.IsStatus(err, iso7816.SwWrongData) {
-		switch tag {
-		case piv.ObjectCertPIVAuth, piv.ObjectCertDigitalSig, piv.ObjectCertKeyMgmt, piv.ObjectCertCardAuth,
-			0xFFF305, 0xFFF30A, 0xFFF30B, safeNetCardAuthMirrorTag, safeNetCHUIDAlias:
-			return nil, fmt.Errorf("safenet: public object %X not found: %w", tag, iso7816.StatusError(iso7816.SwFileNotFound))
-		}
+	if safeNetAllowsWrongDataAsAbsence(tag) && iso7816.IsStatus(err, iso7816.SwWrongData) {
+		return nil, fmt.Errorf("safenet: public object %X not found: %w", tag, iso7816.StatusError(iso7816.SwFileNotFound))
 	}
 	return data, err
 }
@@ -29,10 +25,26 @@ func parsePublicObjectCertificate(data []byte) ([]byte, error) {
 		return certificate, nil
 	}
 	description := adapterslots.DescribeDataObject(data, nil)
-	if description.CertState == adapters.SlotStateAbsent && description.KeyError == nil {
+	if description.CertState == adapters.SlotStateAbsent {
 		return nil, iso7816.StatusError(iso7816.SwFileNotFound)
 	}
 	return nil, err
+}
+
+func preferredPublicObjectError(candidates ...error) error {
+	var firstNotFound error
+	for _, err := range candidates {
+		if err == nil {
+			continue
+		}
+		if !isKeyNotFound(err) {
+			return err
+		}
+		if firstNotFound == nil {
+			firstNotFound = err
+		}
+	}
+	return firstNotFound
 }
 
 func parsePublicObjectStoredKey(data []byte) (crypto.PublicKey, error) {
