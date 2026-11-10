@@ -19,8 +19,8 @@ func (a *Adapter) ReadCertificate(session *adapters.Session, slot piv.Slot) ([]b
 		return nil, err
 	}
 
-	certData, err := session.Client.ReadCertificate(slot)
-	if err == nil {
+	certData, standardErr := session.Client.ReadCertificate(slot)
+	if standardErr == nil {
 		session.Observe(adapters.LogLevelDebug, a, "read-certificate", "read standard certificate object for slot %s", slot)
 		return certData, nil
 	}
@@ -30,8 +30,11 @@ func (a *Adapter) ReadCertificate(session *adapters.Session, slot piv.Slot) ([]b
 	if err != nil {
 		return nil, err
 	}
-	data, err := session.Client.GetData(tag)
+	data, err := readPublicObject(session.Client, tag)
 	if err != nil {
+		if isKeyNotFound(err) && !isKeyNotFound(standardErr) {
+			err = standardErr
+		}
 		return nil, fmt.Errorf("read SafeNet certificate for slot %s: %w", slot, err)
 	}
 	return piv.ParseCertificateObject(data)
@@ -54,7 +57,7 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 	if tagErr != nil {
 		return nil, tagErr
 	}
-	data, mirrorErr := session.Client.GetData(tag)
+	data, mirrorErr := readPublicObject(session.Client, tag)
 	if mirrorErr == nil {
 		publicKey, parseErr := piv.ParsePublicKeyObject(data)
 		if parseErr == nil {
@@ -64,17 +67,27 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 	}
 
 	session.Observe(adapters.LogLevelInfo, a, "read-public-key", "falling back to certificate-derived public key for slot %s", slot)
-	if certData, certErr := a.ReadCertificate(session, slot); certErr == nil {
+	certData, certErr := a.ReadCertificate(session, slot)
+	if certErr == nil {
 		if cert, parseErr := x509.ParseCertificate(certData); parseErr == nil {
 			return cert.PublicKey, nil
+		} else {
+			certErr = parseErr
 		}
 	}
 
 	if mirrorErr != nil {
+		if isKeyNotFound(mirrorErr) {
+			if !isKeyNotFound(err) {
+				mirrorErr = err
+			} else if certErr != nil && !isKeyNotFound(certErr) {
+				mirrorErr = certErr
+			}
+		}
 		return nil, fmt.Errorf("read SafeNet public key for slot %s: %w", slot, mirrorErr)
 	}
 
-	certData, certErr := piv.ParseCertificateObject(data)
+	certData, certErr = piv.ParseCertificateObject(data)
 	if certErr == nil {
 		cert, parseErr := x509.ParseCertificate(certData)
 		if parseErr == nil {
@@ -97,14 +110,14 @@ func (a *Adapter) DescribeSlot(session *adapters.Session, slot piv.Slot) (adapte
 	if err != nil {
 		return adapters.SlotDescription{}, err
 	}
-	standardData, standardErr := session.Client.GetData(standardTag)
+	standardData, standardErr := readPublicObject(session.Client, standardTag)
 	standard := adapterslots.DescribeDataObject(standardData, standardErr)
 	mirrorTag, err := mirrorObjectTag(slot)
 	if err != nil {
 		// Slots without a SafeNet mirror still have a standard PIV view.
 		return standard, nil
 	}
-	mirrorData, mirrorErr := session.Client.GetData(mirrorTag)
+	mirrorData, mirrorErr := readPublicObject(session.Client, mirrorTag)
 	mirror := adapterslots.DescribeDataObject(mirrorData, mirrorErr)
 	return mergeSlotObjects(standard, mirror), nil
 }

@@ -78,7 +78,7 @@ func (a *Adapter) CHUID(session *adapters.Session) ([]byte, error) {
 		return chuid, nil
 	}
 	if iso7816.IsStatus(err, iso7816.SwFileNotFound) {
-		return session.Client.GetData(safeNetCHUIDAlias)
+		return readPublicObject(session.Client, safeNetCHUIDAlias)
 	}
 	return nil, err
 }
