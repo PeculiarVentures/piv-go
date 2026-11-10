@@ -19,7 +19,15 @@ func (a *Adapter) ReadCertificate(session *adapters.Session, slot piv.Slot) ([]b
 		return nil, err
 	}
 
-	certData, standardErr := session.Client.ReadCertificate(slot)
+	standardTag, err := piv.ObjectIDForSlot(slot)
+	if err != nil {
+		return nil, err
+	}
+	standardData, standardErr := readPublicObject(session.Client, standardTag)
+	var certData []byte
+	if standardErr == nil {
+		certData, standardErr = parsePublicObjectCertificate(standardData)
+	}
 	if standardErr == nil {
 		session.Observe(adapters.LogLevelDebug, a, "read-certificate", "read standard certificate object for slot %s", slot)
 		return certData, nil
@@ -31,13 +39,16 @@ func (a *Adapter) ReadCertificate(session *adapters.Session, slot piv.Slot) ([]b
 		return nil, err
 	}
 	data, err := readPublicObject(session.Client, tag)
+	if err == nil {
+		certData, err = parsePublicObjectCertificate(data)
+	}
 	if err != nil {
 		if isKeyNotFound(err) && !isKeyNotFound(standardErr) {
 			err = standardErr
 		}
 		return nil, fmt.Errorf("read SafeNet certificate for slot %s: %w", slot, err)
 	}
-	return piv.ParseCertificateObject(data)
+	return certData, nil
 }
 
 // ReadPublicKey reads a public key from SafeNet slot storage.
@@ -46,7 +57,15 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 		return nil, err
 	}
 
-	publicKey, err := session.Client.ReadStoredPublicKey(slot)
+	standardTag, err := piv.ObjectIDForSlot(slot)
+	if err != nil {
+		return nil, err
+	}
+	standardData, err := readPublicObject(session.Client, standardTag)
+	var publicKey crypto.PublicKey
+	if err == nil {
+		publicKey, err = parsePublicObjectStoredKey(standardData)
+	}
 	if err == nil {
 		session.Observe(adapters.LogLevelDebug, a, "read-public-key", "read stored public key object for slot %s", slot)
 		return publicKey, nil
@@ -58,9 +77,10 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 		return nil, tagErr
 	}
 	data, mirrorErr := readPublicObject(session.Client, tag)
+	var mirrorKeyErr error
 	if mirrorErr == nil {
-		publicKey, parseErr := piv.ParsePublicKeyObject(data)
-		if parseErr == nil {
+		publicKey, mirrorKeyErr = parsePublicObjectStoredKey(data)
+		if mirrorKeyErr == nil {
 			session.Observe(adapters.LogLevelDebug, a, "read-public-key", "parsed public key from SafeNet mirror object for slot %s", slot)
 			return publicKey, nil
 		}
@@ -76,27 +96,26 @@ func (a *Adapter) ReadPublicKey(session *adapters.Session, slot piv.Slot) (crypt
 		}
 	}
 
-	if mirrorErr != nil {
-		if isKeyNotFound(mirrorErr) {
-			if !isKeyNotFound(err) {
-				mirrorErr = err
-			} else if certErr != nil && !isKeyNotFound(certErr) {
-				mirrorErr = certErr
+	if mirrorErr == nil {
+		certData, mirrorErr = parsePublicObjectCertificate(data)
+		if mirrorErr == nil {
+			cert, parseErr := x509.ParseCertificate(certData)
+			if parseErr == nil {
+				return cert.PublicKey, nil
 			}
+			mirrorErr = parseErr
+		} else if !isKeyNotFound(mirrorKeyErr) {
+			mirrorErr = mirrorKeyErr
 		}
-		return nil, fmt.Errorf("read SafeNet public key for slot %s: %w", slot, mirrorErr)
 	}
-
-	certData, certErr = piv.ParseCertificateObject(data)
-	if certErr == nil {
-		cert, parseErr := x509.ParseCertificate(certData)
-		if parseErr == nil {
-			return cert.PublicKey, nil
+	if isKeyNotFound(mirrorErr) {
+		if !isKeyNotFound(err) {
+			mirrorErr = err
+		} else if certErr != nil && !isKeyNotFound(certErr) {
+			mirrorErr = certErr
 		}
-		return nil, fmt.Errorf("read SafeNet public key for slot %s: %w", slot, parseErr)
 	}
-
-	return nil, fmt.Errorf("read SafeNet public key for slot %s: %w", slot, err)
+	return nil, fmt.Errorf("read SafeNet public key for slot %s: %w", slot, mirrorErr)
 }
 
 // DescribeSlot reports the observable slot state, including SafeNet mirror
