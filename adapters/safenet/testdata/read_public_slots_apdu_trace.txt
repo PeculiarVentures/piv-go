@@ -1,0 +1,16 @@
+APDU -> 00 cb 3f ff 05 5c 03 5f c1 05 00
+APDU <- 53 4b 7f 49 43 86 41 04 11 eb 72 97 69 1d b8 2e c0 f9 ca dc 55 ed a2 c0 b9 69 05 13 b0 9f 60 43 e1 21 02 ab a4 ca 62 be f4 ac f8 20 25 ca d3 89 be ce 09 dd 16 d2 65 4e 07 6f 00 fc 6d 6d 96 b9 88 9c 52 7a 68 49 71 c2 71 01 00 fe 00 90 00
+APDU -> 00 cb 3f ff 05 5c 03 ff f3 05 00
+APDU <- 53 4b 7f 49 43 86 41 04 11 eb 72 97 69 1d b8 2e c0 f9 ca dc 55 ed a2 c0 b9 69 05 13 b0 9f 60 43 e1 21 02 ab a4 ca 62 be f4 ac f8 20 25 ca d3 89 be ce 09 dd 16 d2 65 4e 07 6f 00 fc 6d 6d 96 b9 88 9c 52 7a 68 49 71 c2 71 01 00 fe 00 90 00
+APDU -> 00 cb 3f ff 05 5c 03 5f c1 0a 00
+APDU <- 6a 80
+APDU -> 00 cb 3f ff 05 5c 03 ff f3 0a 00
+APDU <- 6a 80
+APDU -> 00 cb 3f ff 05 5c 03 5f c1 0b 00
+APDU <- 6a 80
+APDU -> 00 cb 3f ff 05 5c 03 ff f3 0b 00
+APDU <- 6a 80
+APDU -> 00 cb 3f ff 05 5c 03 5f c1 01 00
+APDU <- 6a 80
+APDU -> 00 cb 3f ff 05 5c 03 ff f3 01 00
+APDU <- 6a 80

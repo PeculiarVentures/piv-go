@@ -3,6 +3,7 @@ package safenet
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,38 @@ import (
 	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
+
+func TestInitializationEmulatorMissingPublicObjectStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		tag uint
+		sw  uint16
+	}{
+		{tag: 0x5FC105, sw: iso7816.SwWrongData},
+		{tag: 0x5FC10A, sw: iso7816.SwWrongData},
+		{tag: 0x5FC10B, sw: iso7816.SwWrongData},
+		{tag: 0x5FC101, sw: iso7816.SwWrongData},
+		{tag: 0xFFF305, sw: iso7816.SwWrongData},
+		{tag: 0xFFF30A, sw: iso7816.SwWrongData},
+		{tag: 0xFFF30B, sw: iso7816.SwWrongData},
+		{tag: 0xFFF301, sw: iso7816.SwWrongData},
+		{tag: 0xFFF302, sw: iso7816.SwWrongData},
+		{tag: 0x5FC102, sw: iso7816.SwFileNotFound},
+		{tag: 0x5FC107, sw: iso7816.SwFileNotFound},
+		{tag: 0x5FC10D, sw: iso7816.SwFileNotFound},
+		{tag: 0xFFF30D, sw: iso7816.SwFileNotFound},
+		{tag: 0xFF900A, sw: iso7816.SwFileNotFound},
+		{tag: 0xFF900C, sw: iso7816.SwFileNotFound},
+		{tag: 0xFF900D, sw: iso7816.SwFileNotFound},
+		{tag: 0xFF900E, sw: iso7816.SwFileNotFound},
+	} {
+		t.Run(fmt.Sprintf("%X", tc.tag), func(t *testing.T) {
+			_, err := piv.NewClient(NewInitializationEmulatorCard()).GetData(tc.tag)
+			if !iso7816.IsStatus(err, tc.sw) {
+				t.Fatalf("raw GET DATA %X = %v, want status %04X", tc.tag, err, tc.sw)
+			}
+		})
+	}
+}
 
 func TestDescribeInitializationReportsSafeNetRequirements(t *testing.T) {
 	requirements, err := NewAdapter().DescribeInitialization(&adapters.Session{ReaderName: "SafeNet eToken Fusion"})
