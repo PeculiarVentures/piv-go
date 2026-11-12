@@ -3,6 +3,7 @@ package slots
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
@@ -36,13 +37,18 @@ func DescribeSlotWithSession(session *adapters.Session, adapter adapters.Adapter
 func PublicKeyAlgorithmName(publicKey crypto.PublicKey) string {
 	switch key := publicKey.(type) {
 	case *ecdsa.PublicKey:
-		switch key.Curve.Params().BitSize {
-		case 256:
+		if key == nil || key.Curve == nil {
+			return "ecdsa-unknown"
+		}
+		switch key.Curve {
+		case elliptic.P256():
 			return "eccp256"
-		case 384:
+		case elliptic.P384():
 			return "eccp384"
+		case elliptic.P521():
+			return "eccp521"
 		default:
-			return fmt.Sprintf("ecdsa-%d", key.Curve.Params().BitSize)
+			return fmt.Sprintf("ecdsa-%s", key.Curve.Params().Name)
 		}
 	case *rsa.PublicKey:
 		switch bits := key.N.BitLen(); {
