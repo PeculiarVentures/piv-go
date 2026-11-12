@@ -24,6 +24,7 @@ Additional public documentation:
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/CLI.md](docs/CLI.md)
+- [docs/signing.md](docs/signing.md)
 
 ## Requirements
 
