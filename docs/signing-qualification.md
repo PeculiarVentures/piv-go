@@ -113,6 +113,16 @@ After the full preview signature matrix passed, the serial guard was made an
 explicit shared direct-PIV read. That final guard passed the read-only identity
 check; the cryptographic matrix and its input/result handling were unchanged.
 
+Before publishing v0.5.0, the complete matrix above was repeated against the
+final signing source from PR #22 (`3cbccc8`), whose tree matched the merged
+`main` source. All three devices passed with OpenSSL 3.6.3, including the final
+shared serial guard, fresh metadata/profile matching where available, and
+NEO's deliberately unknown live-key evidence. No PIV reset was performed.
+A temporary test copy reused existing keys and replaced only missing preview
+test keys in `9c` and the NEO test keys in `9a`/`9c`; only the two hardware test
+files were adapted for this setup. Signing source, identity checks, parameter
+matrices and OpenSSL verification code were unchanged.
+
 Use ykman 5.9.2 for the documented inventory naming contract and OpenSSL 3 with
 ML-DSA support and matching development headers/library for the preview suite.
 A C compiler builds the small EVP empty-message verifier under the test's
