@@ -15,6 +15,8 @@ Application Layer -> PIV Client API -> PIV Core -> ISO 7816 -> PC/SC Transport -
 - `emulator/` provides emulator-backed helpers used by tests and some diagnostics.
 - `cmd/piv/` exposes the public CLI surface.
 - `internal/cli/app/` contains CLI-only orchestration such as output formatting, target resolution, and mutation planning.
+- `internal/rsascheme/` contains reviewed host-side RSA scheme encoding and exact verification helpers, separated from card transport.
+- `integration/` contains opt-in hardware qualification tests; its `hardware` build tag excludes device operations from normal tests.
 
 ## Design constraints
 

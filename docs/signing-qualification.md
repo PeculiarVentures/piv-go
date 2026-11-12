@@ -136,3 +136,6 @@ P-521, secp256k1 and Ed448 have no qualified native path in this release.
 HashML-DSA, EdDSA prehash/context variants and caller-controlled device
 randomness are not claimed. Each requires a separately documented and qualified
 device interface.
+
+See the [device roadmap](signing-device-roadmap.md) for the remaining protocol,
+hardware and release dependencies.
