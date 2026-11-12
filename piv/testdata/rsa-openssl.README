@@ -1,0 +1,21 @@
+rsa-openssl.json contains independent signatures generated with OpenSSL 3.6.3.
+Only the public key, input, and signatures are retained. The temporary test
+private key was generated with:
+
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out key.pem
+  openssl pkey -in key.pem -pubout
+
+For each SHA-256, SHA-384, and SHA-512 digest, the corpus includes PKCS#1 v1.5
+and PSS with exact salt lengths 0, 1, digest length, and maximum for RSA-2048.
+Signatures were generated over the verbatim UTF-8 message field with:
+
+  openssl dgst -sha256 -sign key.pem -out signature message
+  openssl dgst -sha256 -sign key.pem -out signature \
+    -sigopt rsa_padding_mode:pss -sigopt rsa_mgf1_md:sha256 \
+    -sigopt rsa_pss_saltlen:0 message
+
+The hash and salt options were varied for the remaining vectors. Tests verify
+all signatures with the library helper and reject changed digests/parameters.
+The deterministic zero-salt encoded messages are also compared directly to
+the independent OpenSSL signature's recovered RSA representative. Separate
+emulator tests verify library-generated signatures with Go crypto/rsa.

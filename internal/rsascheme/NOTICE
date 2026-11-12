@@ -1,0 +1,18 @@
+This package adapts EMSA-PSS encoding and verification, MGF1, and PKCS#1 v1.5
+encoded-message construction from the Go standard library, version go1.23.12:
+
+https://github.com/golang/go/blob/go1.23.12/src/crypto/rsa/pss.go
+https://github.com/golang/go/blob/go1.23.12/src/crypto/rsa/rsa.go
+https://github.com/golang/go/blob/go1.23.12/src/crypto/rsa/pkcs1v15.go
+
+The original BSD license is included in LICENSE. Original copyright notices
+are retained in each adapted source file.
+
+Local changes: package/function names; removal of
+private-key operations and Go-internal dependencies; exact nonnegative salt
+lengths instead of Go's automatic/equal-hash sentinels; defensive integer and
+length validation; verification does not mutate its encoded input; supported
+DigestInfo hashes restricted to SHA-256, SHA-384, and SHA-512. Public-key RSA
+exponentiation and CSPRNG orchestration remain outside this package.
+Inherited crypto/rsa error strings are retained; the public piv wrappers add
+operation context and expose their own parameter-validation errors.
