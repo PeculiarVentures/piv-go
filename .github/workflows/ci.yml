@@ -40,3 +40,6 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Vet hardware tests without running devices
+        run: go vet -tags hardware ./integration

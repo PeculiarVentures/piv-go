@@ -30,10 +30,21 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+          go vet -tags hardware ./integration
+
+      - name: Find versioned release notes
+        id: release_notes
+        shell: bash
+        run: |
+          notes_path="docs/releases/${GITHUB_REF_NAME}.md"
+          if [[ -f "$notes_path" ]]; then
+            printf 'path=%s\n' "$notes_path" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: ${{ steps.release_notes.outputs.path }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
