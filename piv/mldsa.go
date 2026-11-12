@@ -24,6 +24,7 @@ import (
 	"crypto"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -456,8 +457,17 @@ func MarshalMLDSAPKIXPublicKey(publicKey crypto.PublicKey) ([]byte, error) {
 	return der, nil
 }
 
-// MLDSASigner is a card-backed crypto.Signer for an ML-DSA slot key. It
-// holds only the client, slot, algorithm, and a copy of the public key:
+// ErrUnsupportedMLDSAOptions reports options that cannot be honored by the
+// pure ML-DSA card-backed signer. Callers can identify it with errors.Is.
+var ErrUnsupportedMLDSAOptions = errors.New("piv: unsupported ML-DSA signer options")
+
+// ErrMLDSAOptionsUnsupported is the compatibility name for
+// ErrUnsupportedMLDSAOptions. Both names identify the same error.
+var ErrMLDSAOptionsUnsupported = ErrUnsupportedMLDSAOptions
+
+// MLDSASigner is a card-backed crypto.Signer for a pure ML-DSA slot key
+// with an empty context. It holds only the client, slot, algorithm, and a
+// copy of the public key:
 // private key material never leaves the card and nothing is exported.
 // Sign passes the message to Client.Sign verbatim (ML-DSA signs the raw
 // message; no hashing or padding is applied) and validates the returned
@@ -518,20 +528,38 @@ func (s *MLDSASigner) OpaquePublicKey() *OpaquePublicKey {
 	return &OpaquePublicKey{Algorithm: s.algorithm, Raw: append([]byte(nil), s.publicKey.Raw...)}
 }
 
-// Sign signs digest with the card's slot key by calling Client.Sign
-// verbatim: digest is the ML-DSA message (already hashed by the caller
-// when a pre-hash is desired) and opts are intentionally ignored because
-// the card performs pure ML-DSA over the raw bytes. The returned
-// signature length is validated against the variant. The RSA hash mode is
-// irrelevant for ML-DSA and passes RSASignHashNone.
-func (s *MLDSASigner) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
-	signature, err := s.client.Sign(s.algorithm, s.slot, digest, RSASignHashNone)
+// Sign signs message verbatim using pure ML-DSA with an empty context. The
+// crypto.Signer interface calls this argument digest, but it is the complete
+// message here. Passing a hash as the message still performs pure ML-DSA and
+// does not implement HashML-DSA.
+//
+// Only nil options and crypto.Hash(0) are accepted. Nil preserves existing
+// pure CSR/certificate workflows; all other options return
+// ErrUnsupportedMLDSAOptions before any APDU, including unknown option types
+// whose HashFunc returns zero. Context, prehash and randomness requirements
+// cannot be supplied through this adapter. The io.Reader is unused and does
+// not control the card's internal random number generator.
+//
+// The returned signature length is validated against the ML-DSA variant.
+// A length mismatch wraps ErrInvalidSignatureResponse after the private
+// operation may have completed; callers must not automatically retry it.
+func (s *MLDSASigner) Sign(_ io.Reader, message []byte, opts crypto.SignerOpts) ([]byte, error) {
+	switch option := opts.(type) {
+	case nil:
+	case crypto.Hash:
+		if option != 0 {
+			return nil, fmt.Errorf("%w: pure ML-DSA requires crypto.Hash(0), got hash %d", ErrUnsupportedMLDSAOptions, option)
+		}
+	default:
+		return nil, fmt.Errorf("%w: pure ML-DSA does not support %T", ErrUnsupportedMLDSAOptions, opts)
+	}
+	signature, err := s.client.Sign(s.algorithm, s.slot, message, RSASignHashNone)
 	if err != nil {
 		return nil, fmt.Errorf("piv: ML-DSA sign with slot %s: %w", s.slot, err)
 	}
 	if size, _ := MLDSASignatureLength(s.algorithm); len(signature) != size {
-		return nil, fmt.Errorf("piv: ML-DSA sign with slot %s: signature length %d does not match algorithm 0x%02X (want %d)",
-			s.slot, len(signature), s.algorithm, size)
+		return nil, fmt.Errorf("%w: ML-DSA slot %s: signature length %d does not match algorithm 0x%02X (want %d)",
+			ErrInvalidSignatureResponse, s.slot, len(signature), s.algorithm, size)
 	}
 	return signature, nil
 }
