@@ -108,6 +108,14 @@ every length in the range. The preview message profile retains its existing
 three ML-DSA variants and Ed25519 in `9c`. ECDH is recorded here as hardware
 evidence only: `SigningCapabilityReport` describes signing, not key agreement.
 
+For the subsequent slot-policy release, the same preview token was identified
+again with YubiKey Manager 5.9.2 and a reader-bound PIV serial and GET VERSION:
+model `YubiKey 5C NFC - Enhanced PIN`, device firmware `6.0.0.alpha.8`, PIV
+`0.0.1`. Its existing Ed25519 key in `9a` matched the updated capability report
+using current slot metadata, and empty, ordinary and 4096-byte messages were
+signed and verified with Go's `crypto/ed25519`. This follow-up did not reset
+PIV or replace keys. Other generalized slot combinations were not rechecked.
+
 The NEO follow-up used the YubiKey NEO with device firmware `3.4.9` and PIV
 version `1.0.4`, identified using YubiKey Manager 5.9.2. Its PIV application
 was reset before and after the tests. ECDSA P-256 with SHA-256/384/512 and
