@@ -238,9 +238,13 @@ temporary files; no host private key is created by the hardware suite.
 
 ## Interpretation
 
-The YubiKey provider advertises the qualified preview subset only for the exact
-model, firmware and applet tuple above, and only for the listed slots. It does
-not infer support from a `6.x` prefix or the applet's `0.0.1` value.
+For the exact preview model, firmware and applet tuple above, the YubiKey
+provider advertises the qualified RSA-2048/3072/4096, P-256, P-384, Ed25519
+and ML-DSA operations across the four ordinary slots and `82`–`95`. The slot
+policy generalizes the sampled hardware results recorded above; the tables do
+not assert that every algorithm was physically tested in every slot. It does
+not infer support from a `6.x` prefix or the applet's `0.0.1` value. RSA-1024
+has no qualified preview profile.
 
 Known production YubiKey models use separately cited vendor documentation;
 the production/legacy regressions above qualify only their listed cases.

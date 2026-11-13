@@ -215,8 +215,8 @@ func TestQualifiedSigningCapabilitiesExactParametersAndLimits(t *testing.T) {
 			t.Fatalf("overlong payload: %+v", decision)
 		}
 		key.Slot = piv.SlotCardAuth
-		if decision := adapters.MatchSigningCapability(report, key, signingDigestRequest(adapters.SigningRSAPKCS1v15Digest, crypto.SHA256)); decision.Support != adapters.SigningUnknown {
-			t.Fatalf("untested preview slot must remain unknown: %+v", decision)
+		if decision := adapters.MatchSigningCapability(report, key, signingDigestRequest(adapters.SigningRSAPKCS1v15Digest, crypto.SHA256)); decision.Support != adapters.SigningSupported {
+			t.Fatalf("ordinary preview slot should be supported: %+v", decision)
 		}
 	}
 }
@@ -300,10 +300,26 @@ func TestPreviewQualificationSlotMatrix(t *testing.T) {
 		slots = append(slots, slot)
 	}
 	for _, slot := range slots {
-		key := signingTestKey(slot, adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP256})
-		for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
-			if decision := adapters.MatchSigningCapability(report, key, signingDigestRequest(adapters.SigningECDSA, hash)); decision.Support != adapters.SigningSupported {
-				t.Errorf("P-256 slot %s hash %s: %+v", slot, hash, decision)
+		for _, curve := range []string{adapters.SigningCurveP256, adapters.SigningCurveP384} {
+			key := signingTestKey(slot, adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: curve})
+			for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+				if decision := adapters.MatchSigningCapability(report, key, signingDigestRequest(adapters.SigningECDSA, hash)); decision.Support != adapters.SigningSupported {
+					t.Errorf("EC curve %s slot %s hash %s: %+v", curve, slot, hash, decision)
+				}
+			}
+		}
+		for _, bits := range []int{2048, 3072, 4096} {
+			key := signingTestKey(slot, adapters.SigningKey{Family: adapters.SigningKeyRSA, RSABits: bits})
+			for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+				for _, scheme := range []adapters.SigningScheme{adapters.SigningRSAPKCS1v15Digest, adapters.SigningRSAPSS} {
+					request := signingDigestRequest(scheme, hash)
+					if scheme == adapters.SigningRSAPSS {
+						request.SaltLength = hash.Size()
+					}
+					if decision := adapters.MatchSigningCapability(report, key, request); decision.Support != adapters.SigningSupported {
+						t.Errorf("RSA-%d %s slot %s hash %s: %+v", bits, scheme, slot, hash, decision)
+					}
+				}
 			}
 		}
 	}
@@ -311,26 +327,25 @@ func TestPreviewQualificationSlotMatrix(t *testing.T) {
 		name   string
 		key    adapters.SigningKey
 		scheme adapters.SigningScheme
-		slots  []piv.Slot
 	}{
-		{"Ed25519", adapters.SigningKey{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}, adapters.SigningEdDSA, []piv.Slot{0x9c, 0x9d, 0x82, 0x95}},
-		{"ML-DSA-44", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 44}, adapters.SigningMLDSA, []piv.Slot{0x9c, 0x82}},
-		{"ML-DSA-65", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 65}, adapters.SigningMLDSA, []piv.Slot{0x9a, 0x9c, 0x9d}},
-		{"ML-DSA-87", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 87}, adapters.SigningMLDSA, []piv.Slot{0x9c, 0x9e, 0x95}},
+		{"Ed25519", adapters.SigningKey{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}, adapters.SigningEdDSA},
+		{"ML-DSA-44", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 44}, adapters.SigningMLDSA},
+		{"ML-DSA-65", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 65}, adapters.SigningMLDSA},
+		{"ML-DSA-87", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 87}, adapters.SigningMLDSA},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := adapters.SigningRequest{Parameters: adapters.SigningParameters{Scheme: test.scheme, Input: adapters.SigningInputMessage, Mode: adapters.SigningModePure, Context: adapters.SigningContextAbsent}, InputLength: 4096}
 			for _, slot := range slots {
 				decision := adapters.MatchSigningCapability(report, signingTestKey(slot, test.key), request)
-				want := adapters.SigningUnknown
-				if slices.Contains(test.slots, slot) {
-					want = adapters.SigningSupported
-				}
-				if decision.Support != want {
-					t.Errorf("slot %s: got %+v, want %s", slot, decision, want)
+				if decision.Support != adapters.SigningSupported {
+					t.Errorf("slot %s: got %+v, want supported", slot, decision)
 				}
 			}
 		})
+	}
+	untestedAlgorithm := signingTestKey(piv.SlotAuthentication, adapters.SigningKey{Family: adapters.SigningKeyRSA, RSABits: 1024})
+	if decision := adapters.MatchSigningCapability(report, untestedAlgorithm, signingDigestRequest(adapters.SigningRSAPKCS1v15Digest, crypto.SHA256)); decision.Support != adapters.SigningUnknown {
+		t.Fatalf("unqualified RSA-1024 acquired support: %+v", decision)
 	}
 }
 
