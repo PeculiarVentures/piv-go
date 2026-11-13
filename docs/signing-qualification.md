@@ -108,6 +108,14 @@ every length in the range. The preview message profile retains its existing
 three ML-DSA variants and Ed25519 in `9c`. ECDH is recorded here as hardware
 evidence only: `SigningCapabilityReport` describes signing, not key agreement.
 
+For the subsequent slot-policy release, the same preview token was identified
+again with YubiKey Manager 5.9.2 and a reader-bound PIV serial and GET VERSION:
+model `YubiKey 5C NFC - Enhanced PIN`, device firmware `6.0.0.alpha.8`, PIV
+`0.0.1`. Its existing Ed25519 key in `9a` matched the updated capability report
+using current slot metadata, and empty, ordinary and 4096-byte messages were
+signed and verified with Go's `crypto/ed25519`. This follow-up did not reset
+PIV or replace keys. Other generalized slot combinations were not rechecked.
+
 The NEO follow-up used the YubiKey NEO with device firmware `3.4.9` and PIV
 version `1.0.4`, identified using YubiKey Manager 5.9.2. Its PIV application
 was reset before and after the tests. ECDSA P-256 with SHA-256/384/512 and
@@ -238,9 +246,13 @@ temporary files; no host private key is created by the hardware suite.
 
 ## Interpretation
 
-The YubiKey provider advertises the qualified preview subset only for the exact
-model, firmware and applet tuple above, and only for the listed slots. It does
-not infer support from a `6.x` prefix or the applet's `0.0.1` value.
+For the exact preview model, firmware and applet tuple above, the YubiKey
+provider advertises the qualified RSA-2048/3072/4096, P-256, P-384, Ed25519
+and ML-DSA operations across the four ordinary slots and `82`–`95`. The slot
+policy generalizes the sampled hardware results recorded above; the tables do
+not assert that every algorithm was physically tested in every slot. It does
+not infer support from a `6.x` prefix or the applet's `0.0.1` value. RSA-1024
+has no qualified preview profile.
 
 Known production YubiKey models use separately cited vendor documentation;
 the production/legacy regressions above qualify only their listed cases.

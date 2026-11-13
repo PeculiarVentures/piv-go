@@ -215,30 +215,26 @@ func qualifiedPreviewSigningProfiles() []adapters.SigningProfile {
 	evidence := []adapters.SigningEvidence{{Source: "hardware-qualification", Reference: yubiKeySigningQualificationReference}}
 	prefix := "yubikey/qualified-6.0.0.alpha.8"
 	var profiles []adapters.SigningProfile
-	for _, test := range []struct {
-		bits int
-		slot piv.Slot
-	}{{2048, piv.SlotAuthentication}, {3072, piv.SlotSignature}, {4096, 0x82}} {
-		profiles = append(profiles, rsaSigningProfiles(prefix, test.bits, []piv.Slot{test.slot}, evidence, test.bits > 2048)...)
-	}
-	p256Slots := []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth}
+	slots := []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth}
 	for slot := piv.Slot(0x82); slot <= 0x95; slot++ {
-		p256Slots = append(p256Slots, slot)
+		slots = append(slots, slot)
 	}
-	profiles = append(profiles, ecSigningProfiles(prefix, adapters.SigningCurveP256, p256Slots, evidence)...)
-	profiles = append(profiles, ecSigningProfiles(prefix, adapters.SigningCurveP384, []piv.Slot{piv.SlotCardAuth}, evidence)...)
-	profiles = append(profiles, messageSigningProfile(prefix+"/ed25519", adapters.SigningKey{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}, adapters.SigningEdDSA, 64, []piv.Slot{piv.SlotSignature, piv.SlotKeyManagement, 0x82, 0x95}, evidence))
+	for _, bits := range []int{2048, 3072, 4096} {
+		profiles = append(profiles, rsaSigningProfiles(prefix, bits, slots, evidence, bits > 2048)...)
+	}
+	profiles = append(profiles, ecSigningProfiles(prefix, adapters.SigningCurveP256, slots, evidence)...)
+	profiles = append(profiles, ecSigningProfiles(prefix, adapters.SigningCurveP384, slots, evidence)...)
+	profiles = append(profiles, messageSigningProfile(prefix+"/ed25519", adapters.SigningKey{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}, adapters.SigningEdDSA, 64, slots, evidence))
 	for _, variant := range []struct {
 		algorithm    byte
 		parameterSet int
-		slots        []piv.Slot
 	}{
-		{piv.AlgMLDSA44, 44, []piv.Slot{piv.SlotSignature, 0x82}},
-		{piv.AlgMLDSA65, 65, []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement}},
-		{piv.AlgMLDSA87, 87, []piv.Slot{piv.SlotSignature, piv.SlotCardAuth, 0x95}},
+		{piv.AlgMLDSA44, 44},
+		{piv.AlgMLDSA65, 65},
+		{piv.AlgMLDSA87, 87},
 	} {
 		size, _ := piv.MLDSASignatureLength(variant.algorithm)
-		profiles = append(profiles, messageSigningProfile(fmt.Sprintf("%s/mldsa%d", prefix, variant.parameterSet), adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: variant.parameterSet}, adapters.SigningMLDSA, size, variant.slots, evidence))
+		profiles = append(profiles, messageSigningProfile(fmt.Sprintf("%s/mldsa%d", prefix, variant.parameterSet), adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: variant.parameterSet}, adapters.SigningMLDSA, size, slots, evidence))
 	}
 	return profiles
 }
