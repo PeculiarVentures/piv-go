@@ -3,6 +3,7 @@ package yubikey
 import (
 	"crypto"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -94,7 +95,73 @@ func (a *Adapter) SigningCapabilities(device adapters.SigningDevice) adapters.Si
 		ed.Transport = adapters.SigningTransport{}
 		report.Profiles = append(report.Profiles, ed)
 	}
+	if device.Model == "YubiKey NEO" && device.Firmware == "3.4.9" && device.PIVVersion == "1.0.4" {
+		// The hardware run covered these named-hash operations in every slot
+		// in the documented NEO profiles. Keep other claims documented only:
+		// the run did not cover every raw digest or PSS salt length in every slot.
+		for i := range report.Profiles {
+			profile := &report.Profiles[i]
+			if profile.Parameters.Hash != 0 &&
+				(profile.Key.Family == adapters.SigningKeyEC && profile.Key.CurveOID == adapters.SigningCurveP256 && profile.Parameters.Scheme == adapters.SigningECDSA ||
+					profile.Key.Family == adapters.SigningKeyRSA && profile.Key.RSABits == 2048 && profile.Parameters.Scheme == adapters.SigningRSAPKCS1v15Digest) {
+				profile.Evidence = append(profile.Evidence, adapters.SigningEvidence{Source: "hardware-qualification", Reference: yubiKeySigningQualificationReference})
+			}
+		}
+	}
+	if device.Model == "YubiKey 5C NFC" && device.Firmware == "5.4.3" && device.PIVVersion == "5.4.3" {
+		// Named-hash ECDSA and RSA-2048 PKCS#1 v1.5 were verified in every
+		// ordinary and retired slot. The PSS run covered only hash-sized salts.
+		for i := range report.Profiles {
+			profile := &report.Profiles[i]
+			if profile.Parameters.Hash != 0 &&
+				(profile.Key.Family == adapters.SigningKeyEC && (profile.Key.CurveOID == adapters.SigningCurveP256 || profile.Key.CurveOID == adapters.SigningCurveP384) && profile.Parameters.Scheme == adapters.SigningECDSA ||
+					profile.Key.Family == adapters.SigningKeyRSA && profile.Key.RSABits == 2048 && profile.Parameters.Scheme == adapters.SigningRSAPKCS1v15Digest) {
+				profile.Evidence = append(profile.Evidence, adapters.SigningEvidence{Source: "hardware-qualification", Reference: yubiKeySigningQualificationReference})
+			}
+		}
+	}
+	if device.Model == "YubiKey 4" && device.Firmware == "4.2.8" && device.PIVVersion == "4.2.8" {
+		report.Profiles = qualifyYubiKey4SigningProfiles(report.Profiles)
+	}
 	return report
+}
+
+// Keep the untested slots on their vendor-documented profiles: hardware
+// evidence covers the complete P-256 slot set, but only a sample for P-384
+// and RSA-2048. A split preserves the original claims without attributing
+// the sample's evidence to the rest of the slots.
+func qualifyYubiKey4SigningProfiles(profiles []adapters.SigningProfile) []adapters.SigningProfile {
+	testedSlots := []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth, 0x82, 0x95}
+	evidence := adapters.SigningEvidence{Source: "hardware-qualification", Reference: yubiKeySigningQualificationReference}
+	for i := range len(profiles) {
+		profile := &profiles[i]
+		if profile.Parameters.Hash == 0 {
+			continue
+		}
+		if profile.Key.Family == adapters.SigningKeyEC && profile.Key.CurveOID == adapters.SigningCurveP256 && profile.Parameters.Scheme == adapters.SigningECDSA {
+			profile.Evidence = append(profile.Evidence, evidence)
+			continue
+		}
+		if !(profile.Key.Family == adapters.SigningKeyEC && profile.Key.CurveOID == adapters.SigningCurveP384 && profile.Parameters.Scheme == adapters.SigningECDSA ||
+			profile.Key.Family == adapters.SigningKeyRSA && profile.Key.RSABits == 2048 && profile.Parameters.Scheme == adapters.SigningRSAPKCS1v15Digest) {
+			continue
+		}
+		var tested, remaining []piv.Slot
+		for _, slot := range profile.Slots {
+			if slices.Contains(testedSlots, slot) {
+				tested = append(tested, slot)
+			} else {
+				remaining = append(remaining, slot)
+			}
+		}
+		qualified := *profile
+		qualified.ID += "/qualified-4.2.8"
+		qualified.Slots = tested
+		qualified.Evidence = append(slices.Clone(profile.Evidence), evidence)
+		profile.Slots = remaining
+		profiles = append(profiles, qualified)
+	}
+	return profiles
 }
 
 func cloneSigningDevice(device adapters.SigningDevice) adapters.SigningDevice {
@@ -154,15 +221,24 @@ func qualifiedPreviewSigningProfiles() []adapters.SigningProfile {
 	}{{2048, piv.SlotAuthentication}, {3072, piv.SlotSignature}, {4096, 0x82}} {
 		profiles = append(profiles, rsaSigningProfiles(prefix, test.bits, []piv.Slot{test.slot}, evidence, test.bits > 2048)...)
 	}
-	profiles = append(profiles, ecSigningProfiles(prefix, adapters.SigningCurveP256, []piv.Slot{piv.SlotKeyManagement, 0x95}, evidence)...)
+	p256Slots := []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth}
+	for slot := piv.Slot(0x82); slot <= 0x95; slot++ {
+		p256Slots = append(p256Slots, slot)
+	}
+	profiles = append(profiles, ecSigningProfiles(prefix, adapters.SigningCurveP256, p256Slots, evidence)...)
 	profiles = append(profiles, ecSigningProfiles(prefix, adapters.SigningCurveP384, []piv.Slot{piv.SlotCardAuth}, evidence)...)
-	profiles = append(profiles, messageSigningProfile(prefix+"/ed25519", adapters.SigningKey{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}, adapters.SigningEdDSA, 64, []piv.Slot{piv.SlotSignature}, evidence))
+	profiles = append(profiles, messageSigningProfile(prefix+"/ed25519", adapters.SigningKey{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}, adapters.SigningEdDSA, 64, []piv.Slot{piv.SlotSignature, piv.SlotKeyManagement, 0x82, 0x95}, evidence))
 	for _, variant := range []struct {
 		algorithm    byte
 		parameterSet int
-	}{{piv.AlgMLDSA44, 44}, {piv.AlgMLDSA65, 65}, {piv.AlgMLDSA87, 87}} {
+		slots        []piv.Slot
+	}{
+		{piv.AlgMLDSA44, 44, []piv.Slot{piv.SlotSignature, 0x82}},
+		{piv.AlgMLDSA65, 65, []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement}},
+		{piv.AlgMLDSA87, 87, []piv.Slot{piv.SlotSignature, piv.SlotCardAuth, 0x95}},
+	} {
 		size, _ := piv.MLDSASignatureLength(variant.algorithm)
-		profiles = append(profiles, messageSigningProfile(fmt.Sprintf("%s/mldsa%d", prefix, variant.parameterSet), adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: variant.parameterSet}, adapters.SigningMLDSA, size, []piv.Slot{piv.SlotSignature}, evidence))
+		profiles = append(profiles, messageSigningProfile(fmt.Sprintf("%s/mldsa%d", prefix, variant.parameterSet), adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: variant.parameterSet}, adapters.SigningMLDSA, size, variant.slots, evidence))
 	}
 	return profiles
 }

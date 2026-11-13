@@ -293,6 +293,174 @@ func TestQualifiedECSigningProfilesUseExactCurves(t *testing.T) {
 	}
 }
 
+func TestPreviewQualificationSlotMatrix(t *testing.T) {
+	report := NewAdapter().SigningCapabilities(qualifiedSigningDevice())
+	slots := []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth}
+	for slot := piv.Slot(0x82); slot <= 0x95; slot++ {
+		slots = append(slots, slot)
+	}
+	for _, slot := range slots {
+		key := signingTestKey(slot, adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP256})
+		for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+			if decision := adapters.MatchSigningCapability(report, key, signingDigestRequest(adapters.SigningECDSA, hash)); decision.Support != adapters.SigningSupported {
+				t.Errorf("P-256 slot %s hash %s: %+v", slot, hash, decision)
+			}
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		key    adapters.SigningKey
+		scheme adapters.SigningScheme
+		slots  []piv.Slot
+	}{
+		{"Ed25519", adapters.SigningKey{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}, adapters.SigningEdDSA, []piv.Slot{0x9c, 0x9d, 0x82, 0x95}},
+		{"ML-DSA-44", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 44}, adapters.SigningMLDSA, []piv.Slot{0x9c, 0x82}},
+		{"ML-DSA-65", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 65}, adapters.SigningMLDSA, []piv.Slot{0x9a, 0x9c, 0x9d}},
+		{"ML-DSA-87", adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 87}, adapters.SigningMLDSA, []piv.Slot{0x9c, 0x9e, 0x95}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := adapters.SigningRequest{Parameters: adapters.SigningParameters{Scheme: test.scheme, Input: adapters.SigningInputMessage, Mode: adapters.SigningModePure, Context: adapters.SigningContextAbsent}, InputLength: 4096}
+			for _, slot := range slots {
+				decision := adapters.MatchSigningCapability(report, signingTestKey(slot, test.key), request)
+				want := adapters.SigningUnknown
+				if slices.Contains(test.slots, slot) {
+					want = adapters.SigningSupported
+				}
+				if decision.Support != want {
+					t.Errorf("slot %s: got %+v, want %s", slot, decision, want)
+				}
+			}
+		})
+	}
+}
+
+func TestNEOQualificationEvidenceIsScoped(t *testing.T) {
+	qualified := adapters.SigningDevice{Model: "YubiKey NEO", Firmware: "3.4.9", PIVVersion: "1.0.4"}
+	for _, test := range []struct {
+		name   string
+		device adapters.SigningDevice
+		want   bool
+	}{
+		{"exact", qualified, true},
+		{"other model", adapters.SigningDevice{Model: "YubiKey NEO-n", Firmware: "3.4.9", PIVVersion: "1.0.4"}, false},
+		{"other firmware", adapters.SigningDevice{Model: "YubiKey NEO", Firmware: "3.4.8", PIVVersion: "1.0.4"}, false},
+		{"missing applet", adapters.SigningDevice{Model: "YubiKey NEO", Firmware: "3.4.9"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, profile := range NewAdapter().SigningCapabilities(test.device).Profiles {
+				hardware := slices.ContainsFunc(profile.Evidence, func(e adapters.SigningEvidence) bool { return e.Source == "hardware-qualification" })
+				eligible := profile.Parameters.Hash != 0 && (profile.Key.Family == adapters.SigningKeyEC && profile.Key.CurveOID == adapters.SigningCurveP256 && profile.Parameters.Scheme == adapters.SigningECDSA || profile.Key.Family == adapters.SigningKeyRSA && profile.Key.RSABits == 2048 && profile.Parameters.Scheme == adapters.SigningRSAPKCS1v15Digest)
+				if hardware != (test.want && eligible) {
+					t.Errorf("profile %s hardware evidence = %t, eligible=%t", profile.ID, hardware, eligible)
+				}
+			}
+		})
+	}
+}
+
+func TestYubiKey4QualificationEvidenceIsSlotScoped(t *testing.T) {
+	device := adapters.SigningDevice{Model: "YubiKey 4", Firmware: "4.2.8", PIVVersion: "4.2.8"}
+	testedSlots := []piv.Slot{0x9a, 0x9c, 0x9d, 0x9e, 0x82, 0x95}
+	allSlots := append(slices.Clone(testedSlots), 0x83, 0x90, 0x94)
+	for _, test := range []struct {
+		name   string
+		key    adapters.SigningKey
+		scheme adapters.SigningScheme
+		all    bool
+	}{
+		{"p256", adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP256}, adapters.SigningECDSA, true},
+		{"p384", adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP384}, adapters.SigningECDSA, false},
+		{"rsa2048", adapters.SigningKey{Family: adapters.SigningKeyRSA, RSABits: 2048}, adapters.SigningRSAPKCS1v15Digest, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := NewAdapter().SigningCapabilities(device)
+			for _, slot := range allSlots {
+				for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+					request := signingDigestRequest(test.scheme, hash)
+					decision := adapters.MatchSigningCapability(report, signingTestKey(slot, test.key), request)
+					if decision.Support != adapters.SigningSupported {
+						t.Fatalf("slot %s hash %s: %+v", slot, hash, decision)
+					}
+					var matched []adapters.SigningProfile
+					for _, profile := range report.Profiles {
+						if profile.Key == test.key && profile.Parameters == request.Parameters && slices.Contains(profile.Slots, slot) {
+							matched = append(matched, profile)
+						}
+					}
+					if len(matched) != 1 {
+						t.Fatalf("slot %s hash %s matched %d profiles", slot, hash, len(matched))
+					}
+					hardware := slices.ContainsFunc(matched[0].Evidence, func(e adapters.SigningEvidence) bool { return e.Source == "hardware-qualification" })
+					if want := test.all || slices.Contains(testedSlots, slot); hardware != want {
+						t.Errorf("slot %s hash %s hardware evidence=%t, want %t", slot, hash, hardware, want)
+					}
+				}
+			}
+		})
+	}
+	for _, device := range []adapters.SigningDevice{
+		{Model: "YubiKey 4", Firmware: "4.2.8"},
+		{Model: "YubiKey 4", Firmware: "4.2.9", PIVVersion: "4.2.8"},
+		{Model: "YubiKey 4C", Firmware: "4.2.8", PIVVersion: "4.2.8"},
+	} {
+		for _, profile := range NewAdapter().SigningCapabilities(device).Profiles {
+			if slices.ContainsFunc(profile.Evidence, func(e adapters.SigningEvidence) bool { return e.Source == "hardware-qualification" }) {
+				t.Errorf("hardware qualification leaked to device %+v", device)
+			}
+		}
+	}
+}
+
+func TestYubiKey5QualificationEvidenceIsScoped(t *testing.T) {
+	device := adapters.SigningDevice{Model: "YubiKey 5C NFC", Firmware: "5.4.3", PIVVersion: "5.4.3"}
+	report := NewAdapter().SigningCapabilities(device)
+	slots := []piv.Slot{0x9a, 0x9c, 0x9d, 0x9e}
+	for slot := piv.Slot(0x82); slot <= 0x95; slot++ {
+		slots = append(slots, slot)
+	}
+	for _, test := range []struct {
+		name   string
+		key    adapters.SigningKey
+		scheme adapters.SigningScheme
+	}{
+		{"p256", adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP256}, adapters.SigningECDSA},
+		{"p384", adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP384}, adapters.SigningECDSA},
+		{"rsa2048", adapters.SigningKey{Family: adapters.SigningKeyRSA, RSABits: 2048}, adapters.SigningRSAPKCS1v15Digest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, slot := range slots {
+				for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+					request := signingDigestRequest(test.scheme, hash)
+					decision := adapters.MatchSigningCapability(report, signingTestKey(slot, test.key), request)
+					if decision.Support != adapters.SigningSupported {
+						t.Fatalf("slot %s hash %s: %+v", slot, hash, decision)
+					}
+					profileIndex := slices.IndexFunc(report.Profiles, func(profile adapters.SigningProfile) bool { return profile.ID == decision.ProfileID })
+					if profileIndex < 0 || !slices.ContainsFunc(report.Profiles[profileIndex].Evidence, func(e adapters.SigningEvidence) bool { return e.Source == "hardware-qualification" }) {
+						t.Errorf("slot %s hash %s missing hardware evidence", slot, hash)
+					}
+				}
+			}
+		})
+	}
+	for _, profile := range report.Profiles {
+		if profile.Parameters.Scheme == adapters.SigningRSAPSS && slices.ContainsFunc(profile.Evidence, func(e adapters.SigningEvidence) bool { return e.Source == "hardware-qualification" }) {
+			t.Errorf("partially tested PSS salt range acquired hardware evidence: %s", profile.ID)
+		}
+	}
+	for _, other := range []adapters.SigningDevice{
+		{Model: "YubiKey 5C NFC", Firmware: "5.4.3"},
+		{Model: "YubiKey 5C NFC", Firmware: "5.4.2", PIVVersion: "5.4.3"},
+		{Model: "YubiKey 5C", Firmware: "5.4.3", PIVVersion: "5.4.3"},
+	} {
+		for _, profile := range NewAdapter().SigningCapabilities(other).Profiles {
+			if slices.ContainsFunc(profile.Evidence, func(e adapters.SigningEvidence) bool { return e.Source == "hardware-qualification" }) {
+				t.Errorf("hardware qualification leaked to device %+v", other)
+			}
+		}
+	}
+}
+
 func TestQualifiedMessageSigningProfilesRemainPure(t *testing.T) {
 	report := NewAdapter().SigningCapabilities(qualifiedSigningDevice())
 	for _, key := range []adapters.SigningKey{
