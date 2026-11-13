@@ -4,6 +4,10 @@ Qualification date: 2026-11-12. These results describe the designated preview,
 production and legacy test devices and the listed parameter combinations,
 not universal PIV or YubiKey support.
 
+Additional slot-specific checks were performed on 2026-11-13 and are recorded
+separately below. They do not imply that all algorithms or operations work in
+every slot.
+
 ## Preview test environment
 
 - Device: YubiKey 5C NFC - Enhanced PIN, used as the Yubico 6 test token.
@@ -14,7 +18,7 @@ not universal PIV or YubiKey support.
 - Keys: generated on the test device after PIV reset; PIN policy always,
   touch policy never. The test does not qualify touch-enforced workflows.
 
-## Qualified subset
+## Originally qualified preview subset
 
 | Operation | Key | Slot | Verified input/parameters | Hardware result |
 |---|---|---|---|---|
@@ -72,12 +76,115 @@ turn a later passive certificate/template read into metadata evidence. The
 read-only legacy regression verifies that its static P-256 profile can exist
 while current-key capability matching correctly remains unknown.
 
+## Additional slot checks, 2026-11-13
+
+The preview tests used the user-identified YubiKey 6 preview card (PIV serial
+`38997686`) associated with the model/firmware/applet tuple above. The tests
+checked the PIV serial, but did **not** independently re-read the model,
+device firmware, or PIV applet version during this follow-up. Those identity
+fields are based on the supplied session context and should be rechecked on
+the device before treating this as independently established inventory. All
+checks below used USB PC/SC on macOS arm64. The P-256 signatures were verified
+using Go's `crypto/ecdsa`; one `9c` SHA-256 signature was also verified using
+OpenSSL. Ed25519 signatures were verified with Go's `crypto/ed25519`, and
+ML-DSA signatures with CIRCL. ECDH results were compared to a host-generated
+peer's independently computed secret. PIN/touch policies varied between tests;
+these results do not qualify touch-enforced workflows.
+
+| Operation | Key | Tested slots | Inputs or parameters |
+|---|---|---|---|
+| ECDSA | P-256 | `9a`, `9c`, `9e`, `82`–`95` | SHA-256/384/512 via `SignECDSA` |
+| ECDSA | P-256 | `9d` | SHA-256 via the CLI's signing path |
+| Pure EdDSA | Ed25519 | `9d`, `82`, `95` | Empty, ordinary and 4096-byte messages |
+| Pure ML-DSA | ML-DSA-44 | `9c`, `82` | Empty, ordinary and 4096-byte messages; empty context |
+| Pure ML-DSA | ML-DSA-65 | `9a`, `9d` | Empty, ordinary and 4096-byte messages; empty context |
+| Pure ML-DSA | ML-DSA-87 | `9e`, `95` | Empty, ordinary and 4096-byte messages; empty context |
+| ECDH | P-256 | `9a`, `9c`, `9d`, `9e`, `82`, `95` | Host peer and card shared secrets matched |
+| ECDH | X25519 | `9d`, `82`, `95` | Host peer and card shared secrets matched |
+
+These message-input checks exercised the endpoints and ordinary lengths, not
+every length in the range. The preview message profile retains its existing
+4096-byte limit. The original preview tests above independently qualified all
+three ML-DSA variants and Ed25519 in `9c`. ECDH is recorded here as hardware
+evidence only: `SigningCapabilityReport` describes signing, not key agreement.
+
+The NEO follow-up used the YubiKey NEO with device firmware `3.4.9` and PIV
+version `1.0.4`, identified using YubiKey Manager 5.9.2. Its PIV application
+was reset before and after the tests. ECDSA P-256 with SHA-256/384/512 and
+RSA-2048 PKCS#1 v1.5 and PSS with SHA-256/384/512 and hash-sized salt were
+verified on `9a`, `9c`, `9d`, and `9e` using Go's `crypto/ecdsa` and
+`crypto/rsa`. The P-256 ECDH result in all four slots matched a host peer.
+RSA-2048 PKCS#1 v1.5 and OAEP-SHA-256 encrypted messages were recovered in
+all four slots: the card performed the raw private RSA operation, with padding
+encoded and removed on the host. RSA-1024 signing and decryption were sampled
+in `9a`; RSA-3072 and RSA-4096 key generation there returned `6A80`.
+RSA-2048 generation returned `6B00` in each slot `82`–`95`; P-256 generation
+also returned `6B00` in `82` and `95`. Ed25519, X25519 and ML-DSA-44/65/87
+generation in `9a` returned `6A80`.
+
+The NEO profile already advertised documented P-256 and RSA-2048 signing
+for the four main slots. For the exact tested NEO identity, the named-hash
+ECDSA and RSA PKCS#1 v1.5 profiles additionally cite this hardware evidence.
+The wider documented PSS salt ranges are not represented as hardware-tested
+in every slot. RSA decryption and ECDH do not belong to the signing report.
+The NEO remains metadata-blind for current-key matching.
+
+The YubiKey 4 follow-up used a card identified by YubiKey Manager 5.9.2 as
+`YubiKey 4`, device firmware `4.2.8`, PIV applet `4.2.8` (PIV serial
+`4158393`). The test verified the reader-bound serial, reset PIV before and
+afterward, generated keys with default policies and used the reset PIN. The
+following operations were verified on USB PC/SC using Go's cryptographic
+implementations for independent signature and shared-secret checks:
+
+| Operation | Key | Tested slots | Inputs or parameters |
+|---|---|---|---|
+| ECDSA and ECDH | P-256 | `9a`, `9c`, `9d`, `9e`, `82`–`95` | SHA-256/384/512; host peer shared secret |
+| ECDSA and ECDH | P-384 | `9a`, `9c`, `9d`, `9e`, `82`, `95` | SHA-256/384/512; host peer shared secret |
+| RSA signature and decryption | RSA-2048 | `9a`, `9c`, `9d`, `9e`, `82`, `95` | PKCS#1 v1.5 and PSS SHA-256/384/512 with hash-sized PSS salt; PKCS#1 v1.5 and OAEP-SHA-256 decryption |
+| RSA signature and decryption | RSA-1024 | `9a` | PKCS#1 v1.5 SHA-256/384/512, PSS SHA-256/384 with hash-sized salt; PKCS#1 v1.5 and OAEP-SHA-256 decryption |
+
+RSA encryption padding and unpadding were performed on the host; the card
+performed the raw private RSA operation. RSA-3072 and RSA-4096, Ed25519,
+X25519, and ML-DSA-44/65/87 generation in `9a` returned `6A80`.
+For the exact YubiKey 4 tuple above, named-hash P-256 signing profiles cite the
+hardware result for all their slots. Named-hash P-384 ECDSA and RSA-2048
+PKCS#1 v1.5 profiles are split so only the six tested slots cite hardware
+evidence; other slots retain their existing vendor documentation evidence.
+The wider PSS salt ranges, ECDH, and decryption are not claimed by the added
+signing-profile evidence. As with NEO, this device lacks authoritative current
+key metadata for `MatchSigningCapability`, which remains unknown when only a
+stored public object or certificate is available.
+
+The subsequent YubiKey 5 follow-up used a card identified by YubiKey Manager
+5.9.2 as `YubiKey 5C NFC`, device firmware `5.4.3`, PIV applet `5.4.3` (PIV
+serial `26748006`). The tests checked the serial against the PIV reader, reset
+PIV before and after the run, generated keys with default PIN/touch policies,
+and verified the reset PIN for each private operation. On USB PC/SC, Go's
+cryptographic implementations independently verified the following results:
+
+| Operation | Key | Tested slots | Inputs or parameters |
+|---|---|---|---|
+| ECDSA and ECDH | P-256, P-384 | `9a`, `9c`, `9d`, `9e`, `82`–`95` | SHA-256/384/512; host peer shared secret |
+| RSA signature and decryption | RSA-2048 | `9a`, `9c`, `9d`, `9e`, `82`–`95` | PKCS#1 v1.5 and PSS SHA-256/384/512 with hash-sized PSS salt; PKCS#1 v1.5 and OAEP-SHA-256 decryption |
+| RSA signature and decryption | RSA-1024 | `9a` | PKCS#1 v1.5 SHA-256/384/512, PSS SHA-256/384 with hash-sized salt; PKCS#1 v1.5 and OAEP-SHA-256 decryption |
+
+For RSA decryption, the host applied and removed padding while the card
+performed the raw private RSA operation. RSA-3072/4096, Ed25519, X25519 and
+ML-DSA-44/65/87 key generation in `9a` returned `6A80`. These errors concern
+the tested generation requests and do not establish every other operation.
+For the exact YubiKey 5 tuple above, named-hash P-256 and P-384 ECDSA and
+RSA-2048 PKCS#1 v1.5 profiles cite the hardware evidence for all their slots.
+The test used hash-sized PSS salts and does not qualify the wider salt range
+as hardware-tested. ECDH and RSA decryption remain outside the signing report.
+
 ## Reproduce
 
 The hardware suite is separate from normal tests. It resets the selected PIV
 application, replaces keys and uses the reset defaults. Use a dedicated test
 token. The reader and expected serial are both required; a mismatch aborts
 before reset. No APDU trace or private key is written to the repository.
+The additional slot checks above were performed separately using temporary
+test programs and are not fully reproduced by the commands below.
 
 ```sh
 PIV_TEST_ALLOW_RESET=1 \
