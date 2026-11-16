@@ -158,6 +158,13 @@ fmt.Printf("signature length: %d\n", len(signature))
 In a complete application, resolve `runtime` through the adapter layer after connecting to the card, compute `digest` from the message you want to sign, and source `pin` from your own credential-handling path rather than from a command
 line argument.
 
+YubiKey signing reports select explicit model/firmware families, including a
+separate YubiKey 6 preview policy for the known `YubiKey 5C NFC - Enhanced PIN`
+identity with `6.x.y.alpha.n` or `6.x.y.beta.n` device firmware. The base policy
+includes pure Ed25519 and ML-DSA; hardware evidence remains tied to the exact
+tested tuple. See [family profiles](docs/signing.md#yubikey-family-profiles)
+and [hardware qualification](docs/signing-qualification.md).
+
 ## PIV secure messaging
 
 `piv.OpenSecureMessaging` opens SP 800-73-4 Part 2 secure messaging with a card that supports it, with cipher suite 27 (P-256, AES-128) or 2E (P-384, AES-256). The card proves its key with a card verifiable certificate (CVC), and the client checks that CVC against the content signing certificate in the card's Secure Messaging Certificate Signer object (5FC122), whose path it validates to the roots you give it. The returned channel is a `piv.Card`, so a client built on it sends every command encrypted and MAC-protected. Over secure messaging, `VerifyPairingCode` activates the virtual contact interface, which lets a contactless reader do what a contact reader can.

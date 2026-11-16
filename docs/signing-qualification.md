@@ -246,13 +246,31 @@ temporary files; no host private key is created by the hardware suite.
 
 ## Interpretation
 
-For the exact preview model, firmware and applet tuple above, the YubiKey
-provider advertises the qualified RSA-2048/3072/4096, P-256, P-384, Ed25519
-and ML-DSA operations across the four ordinary slots and `82`–`95`. The slot
-policy generalizes the sampled hardware results recorded above; the tables do
-not assert that every algorithm was physically tested in every slot. It does
-not infer support from a `6.x` prefix or the applet's `0.0.1` value. RSA-1024
-has no qualified preview profile.
+The [YubiKey family policy](signing.md#yubikey-family-profiles) supplies the
+base RSA-2048/3072/4096, P-256, P-384, pure Ed25519 and ML-DSA profiles across
+the four ordinary slots and `82`–`95` for the exact known preview inventory
+model with valid `6.x.y.alpha.n` or `6.x.y.beta.n` device firmware. This explicitly
+generalizes the sampled results above, including the conservative 4096-byte
+message limit, to other alpha/beta releases. Those releases have not been
+individually hardware-qualified. Production version 6, FIPS/Bio, unknown models
+and incomplete or malformed firmware remain outside that policy. RSA-1024 has
+no preview profile.
+
+Hardware evidence is still restricted to the exact preview model,
+`6.0.0.alpha.8` firmware and PIV `0.0.1` tuple. The report splits profiles by
+slot so only the independently inventoried original matrix and subsequent
+read-only Ed25519 `9a` check add hardware provenance. Named-hash ECDSA and RSA
+digest/zero-salt PSS operations use `hardware-qualification`; message/payload
+length intervals and positive-salt PSS intervals use `hardware-samples`. Other
+slots and raw ECDSA digest profiles retain only `family-policy` evidence. The
+tables remain the source for the exact samples, not proof of every value in an
+interval. Follow-up checks without independent inventory remain recorded here
+and are not broadened into exact report evidence.
+
+The PIV applet version gates the added hardware evidence, not the base family
+policy. A missing or different applet version therefore leaves the known
+preview's base profiles available but supplies no hardware qualification. The
+applet's `0.0.1` value alone never identifies a preview device or its firmware.
 
 Known production YubiKey models use separately cited vendor documentation;
 the production/legacy regressions above qualify only their listed cases.

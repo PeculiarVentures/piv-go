@@ -152,9 +152,6 @@ func TestSigningCapabilitiesDoNotInferDeviceFirmware(t *testing.T) {
 		{Model: "YubiKey 5C NFC FIPS", Firmware: "5.7.0"},
 		{Model: "YubiKey 5C NFC - unknown", Firmware: "5.7.0"},
 		{Model: "unrecognized YubiKey", Firmware: "5.7.0"},
-		{Model: qualifiedPreviewModel, Firmware: qualifiedPreviewFirmware},
-		{Model: qualifiedPreviewModel, Firmware: qualifiedPreviewFirmware, PIVVersion: "0.0.2"},
-		{Model: qualifiedPreviewModel, Firmware: "6.0.0.alpha.9", PIVVersion: "0.0.1"},
 		{Model: "YubiKey 5C NFC", Firmware: "5.7"},
 		{Model: "YubiKey 5C NFC", Firmware: "+5.7.0"},
 		{Model: "YubiKey 5C NFC", Firmware: "5.7.256"},
@@ -533,8 +530,8 @@ func TestSigningReportsArePureAndSeparateFromLiveKeyEvidence(t *testing.T) {
 		t.Fatal("report aliases the caller's device evidence")
 	}
 	for _, profile := range report.Profiles {
-		if len(profile.Evidence) == 0 || profile.Evidence[0].Source != "hardware-qualification" {
-			t.Fatalf("qualified profile lost provenance: %+v", profile)
+		if len(profile.Evidence) == 0 || profile.Evidence[0].Source != "family-policy" {
+			t.Fatalf("preview profile lost family policy provenance: %+v", profile)
 		}
 	}
 	key := signingTestKey(piv.SlotAuthentication, adapters.SigningKey{Family: adapters.SigningKeyRSA, RSABits: 2048})
