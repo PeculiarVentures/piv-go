@@ -2,6 +2,8 @@ package yubikey
 
 import (
 	"crypto"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -177,6 +179,212 @@ func TestPreviewHardwareEvidenceRequiresExactTuple(t *testing.T) {
 			}
 			if hardware != exact {
 				t.Fatalf("hardware evidence = %t, exact tuple = %t", hardware, exact)
+			}
+		})
+	}
+}
+
+func previewSigningTestDevices() []adapters.SigningDevice {
+	return []adapters.SigningDevice{
+		qualifiedSigningDevice(),
+		{Model: qualifiedPreviewModel, Firmware: qualifiedPreviewFirmware},
+		{Model: qualifiedPreviewModel, Firmware: qualifiedPreviewFirmware, PIVVersion: "0.0.2"},
+		{Model: qualifiedPreviewModel, Firmware: "6.0.0.alpha.0"},
+		{Model: qualifiedPreviewModel, Firmware: "6.0.0.alpha.2", PIVVersion: "0.0.1"},
+		{Model: qualifiedPreviewModel, Firmware: "6.0.0.alpha.9"},
+		{Model: qualifiedPreviewModel, Firmware: "6.0.0.beta.0", PIVVersion: "0.0.1"},
+		{Model: qualifiedPreviewModel, Firmware: "6.1.2.beta.257"},
+		{Model: qualifiedPreviewModel, Firmware: "6.255.255.alpha.12345678901234567890"},
+		{Model: qualifiedPreviewModel, Firmware: "6.255.255.beta.12345678901234567890"},
+	}
+}
+
+func previewSigningTestSlots() []piv.Slot {
+	slots := []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth}
+	for slot := piv.Slot(0x82); slot <= 0x95; slot++ {
+		slots = append(slots, slot)
+	}
+	return slots
+}
+
+func TestPreviewProfilePartitionPreservesCoverageAndProvenance(t *testing.T) {
+	type operation struct {
+		key        adapters.SigningKey
+		parameters adapters.SigningParameters
+		salt       int
+	}
+	operationOf := func(profile adapters.SigningProfile, salt int) operation {
+		return operation{profile.Key, profile.Parameters, salt}
+	}
+	base := NewAdapter().SigningCapabilities(adapters.SigningDevice{Model: qualifiedPreviewModel, Firmware: qualifiedPreviewFirmware})
+	operations := make(map[operation]adapters.SigningProfile)
+	for _, profile := range base.Profiles {
+		for salt := profile.SaltLength.Min; salt <= profile.SaltLength.Max; salt++ {
+			op := operationOf(profile, salt)
+			if _, exists := operations[op]; exists {
+				t.Fatalf("overlapping base operation: %+v", op)
+			}
+			operations[op] = profile
+		}
+	}
+	if len(operations) == 0 {
+		t.Fatal("preview family has no base operations")
+	}
+	hardwareSlots := map[adapters.SigningKey][]piv.Slot{
+		{Family: adapters.SigningKeyRSA, RSABits: 2048}:                            {piv.SlotAuthentication},
+		{Family: adapters.SigningKeyRSA, RSABits: 3072}:                            {piv.SlotSignature},
+		{Family: adapters.SigningKeyRSA, RSABits: 4096}:                            {0x82},
+		{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP256}:       {piv.SlotKeyManagement, 0x95},
+		{Family: adapters.SigningKeyEC, CurveOID: adapters.SigningCurveP384}:       {piv.SlotCardAuth},
+		{Family: adapters.SigningKeyEdDSA, CurveOID: adapters.SigningCurveEd25519}: {piv.SlotAuthentication, piv.SlotSignature},
+		{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 44}:                  {piv.SlotSignature},
+		{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 65}:                  {piv.SlotSignature},
+		{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: 87}:                  {piv.SlotSignature},
+	}
+	slots := previewSigningTestSlots()
+	for _, device := range previewSigningTestDevices() {
+		t.Run(device.Firmware+"/"+device.PIVVersion, func(t *testing.T) {
+			report := NewAdapter().SigningCapabilities(device)
+			exact := device.Firmware == qualifiedPreviewFirmware && device.PIVVersion == "0.0.1"
+			ids := make(map[string]bool)
+			coverage := make(map[operation]map[piv.Slot]int)
+			for _, profile := range report.Profiles {
+				if profile.ID == "" || ids[profile.ID] || !strings.HasPrefix(profile.ID, "yubikey/6-preview/") {
+					t.Fatalf("empty, duplicate or non-family profile ID: %q", profile.ID)
+				}
+				ids[profile.ID] = true
+				if len(profile.Slots) == 0 {
+					t.Fatalf("profile %s has no slots", profile.ID)
+				}
+				op := operationOf(profile, profile.SaltLength.Min)
+				original, ok := operations[op]
+				if !ok {
+					t.Fatalf("profile %s introduced an operation: %+v", profile.ID, op)
+				}
+				normalized := profile
+				normalized.ID, normalized.Slots, normalized.Evidence = original.ID, original.Slots, original.Evidence
+				if !reflect.DeepEqual(normalized, original) {
+					t.Fatalf("profile %s changed operation behavior during partitioning: %+v", profile.ID, profile)
+				}
+				for _, slot := range profile.Slots {
+					if !slices.Contains(slots, slot) {
+						t.Fatalf("profile %s acquired ineligible slot %s", profile.ID, slot)
+					}
+					for salt := profile.SaltLength.Min; salt <= profile.SaltLength.Max; salt++ {
+						op := operationOf(profile, salt)
+						if coverage[op] == nil {
+							coverage[op] = make(map[piv.Slot]int)
+						}
+						coverage[op][slot]++
+					}
+					evidence := []adapters.SigningEvidence{{Source: "family-policy", Reference: yubiKeySigningFamilyPolicyReference}}
+					hardware := exact && slices.Contains(hardwareSlots[profile.Key], slot) && !(profile.Key.Family == adapters.SigningKeyEC && profile.Parameters.Hash == 0)
+					if hardware {
+						source := "hardware-qualification"
+						if profile.Parameters.Input == adapters.SigningInputPayload || profile.Parameters.Input == adapters.SigningInputMessage || profile.SaltLength.Max > 0 {
+							source = "hardware-samples"
+						}
+						evidence = append(evidence, adapters.SigningEvidence{Source: source, Reference: yubiKeySigningQualificationReference})
+					}
+					if !reflect.DeepEqual(profile.Evidence, evidence) {
+						t.Fatalf("profile %s slot %s evidence = %+v, want %+v", profile.ID, slot, profile.Evidence, evidence)
+					}
+					if strings.HasSuffix(profile.ID, "/evidence-6.0.0.alpha.8") != hardware {
+						t.Fatalf("profile %s slot %s ID does not reflect hardware provenance", profile.ID, slot)
+					}
+				}
+			}
+			for op := range operations {
+				for _, slot := range slots {
+					if count := coverage[op][slot]; count != 1 {
+						t.Errorf("operation %+v covers slot %s %d times, want exactly once", op, slot, count)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPreviewFamilyRSAAndECDSAParametersAcrossReleases(t *testing.T) {
+	for _, device := range previewSigningTestDevices() {
+		t.Run(device.Firmware+"/"+device.PIVVersion, func(t *testing.T) {
+			report := NewAdapter().SigningCapabilities(device)
+			check := func(t *testing.T, key adapters.SigningKeyEvidence, request adapters.SigningRequest, support adapters.SigningSupport, reason adapters.SigningReason) {
+				t.Helper()
+				decision := adapters.MatchSigningCapability(report, key, request)
+				if decision.Support != support || decision.Reason != reason {
+					t.Fatalf("key %+v request %+v: got %+v, want %s/%s", key, request, decision, support, reason)
+				}
+			}
+			for _, slot := range previewSigningTestSlots() {
+				for _, bits := range []int{2048, 3072, 4096} {
+					t.Run(fmt.Sprintf("%s/RSA%d", slot, bits), func(t *testing.T) {
+						key := signingTestKey(slot, adapters.SigningKey{Family: adapters.SigningKeyRSA, RSABits: bits})
+						for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+							for _, scheme := range []adapters.SigningScheme{adapters.SigningRSAPKCS1v15Digest, adapters.SigningRSAPSS} {
+								request := signingDigestRequest(scheme, hash)
+								salts := []int{0}
+								if scheme == adapters.SigningRSAPSS {
+									salts = append(salts, 1, hash.Size(), bits/8-hash.Size()-2)
+								}
+								for _, salt := range salts {
+									request.SaltLength = salt
+									request.Randomness = adapters.SigningRandomnessDeterministic
+									if salt > 0 {
+										request.Randomness = adapters.SigningRandomnessHostCSPRNG
+									}
+									check(t, key, request, adapters.SigningSupported, adapters.SigningReasonProfileMatched)
+									if salt > 0 {
+										request.Randomness = adapters.SigningRandomnessDeterministic
+										check(t, key, request, adapters.SigningUnsupported, adapters.SigningReasonRandomness)
+									}
+								}
+								request.Randomness = ""
+								if scheme == adapters.SigningRSAPSS {
+									request.SaltLength = bits/8 - hash.Size() - 1
+									check(t, key, request, adapters.SigningUnsupported, adapters.SigningReasonLimits)
+									request.SaltLength = 0
+									request.Parameters.MGF1Hash = crypto.SHA224
+									check(t, key, request, adapters.SigningUnknown, adapters.SigningReasonQualificationPending)
+									request.Parameters.MGF1Hash = hash
+								}
+								for _, length := range []int{hash.Size() - 1, hash.Size() + 1} {
+									request.InputLength = length
+									check(t, key, request, adapters.SigningUnsupported, adapters.SigningReasonInvalidRequest)
+								}
+							}
+						}
+						payload := adapters.SigningRequest{Parameters: adapters.SigningParameters{Scheme: adapters.SigningRSAPKCS1v15Payload, Input: adapters.SigningInputPayload, Context: adapters.SigningContextAbsent}, Randomness: adapters.SigningRandomnessDeterministic}
+						for _, length := range []int{0, bits/8 - 11} {
+							payload.InputLength = length
+							check(t, key, payload, adapters.SigningSupported, adapters.SigningReasonProfileMatched)
+						}
+						payload.InputLength++
+						check(t, key, payload, adapters.SigningUnsupported, adapters.SigningReasonLimits)
+					})
+				}
+				for _, test := range []struct {
+					curve string
+					width int
+				}{{adapters.SigningCurveP256, 32}, {adapters.SigningCurveP384, 48}} {
+					t.Run(fmt.Sprintf("%s/EC%s", slot, test.curve), func(t *testing.T) {
+						key := signingTestKey(slot, adapters.SigningKey{Family: adapters.SigningKeyEC, CurveOID: test.curve})
+						for _, hash := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
+							request := signingDigestRequest(adapters.SigningECDSA, hash)
+							check(t, key, request, adapters.SigningSupported, adapters.SigningReasonProfileMatched)
+							for _, length := range []int{hash.Size() - 1, hash.Size() + 1} {
+								request.InputLength = length
+								check(t, key, request, adapters.SigningUnsupported, adapters.SigningReasonInvalidRequest)
+							}
+						}
+						raw := adapters.SigningRequest{Parameters: adapters.SigningParameters{Scheme: adapters.SigningECDSA, Input: adapters.SigningInputDigest, Context: adapters.SigningContextAbsent}, InputLength: test.width}
+						check(t, key, raw, adapters.SigningSupported, adapters.SigningReasonProfileMatched)
+						for _, length := range []int{test.width - 1, test.width + 1} {
+							raw.InputLength = length
+							check(t, key, raw, adapters.SigningUnsupported, adapters.SigningReasonLimits)
+						}
+					})
+				}
 			}
 		})
 	}
