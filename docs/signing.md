@@ -139,8 +139,67 @@ explicit management/device inventory and includes its version qualifier, such
 as `6.0.0.alpha.8`. `PIVVersion` is the raw PIV GET VERSION value. Reader labels
 and PIV applet versions do not substitute for device firmware. The library does
 not invoke ykman or collect either inventory field when reporting capabilities.
-FIPS and unknown suffixes remain unqualified unless explicitly supported by a
-separate profile.
+FIPS, Bio and unknown suffixes remain unqualified unless explicitly supported
+by a separate profile.
+
+### YubiKey family profiles
+
+A base profile describes the library's policy for a recognized model and device
+firmware family. Hardware qualification is separate evidence for a particular
+model, device firmware, PIV applet version, slot and parameter combination.
+
+| Family | Device firmware policy | Base signing profiles |
+|---|---|---|
+| Non-FIPS NEO | Known NEO model names, production `3.x.y` | RSA-1024/2048 and P-256; four ordinary slots |
+| Non-FIPS YubiKey 4 | Known 4-series model names, production `4.x.y` | RSA-1024/2048, P-256 and P-384; ordinary and retired slots |
+| Non-FIPS YubiKey 5 | Known 5-series model names, production `5.x.y` | RSA-1024/2048, P-256 and P-384; RSA-3072/4096 from 5.7; Ed25519 from 5.7 with message limits still `unknown` |
+| YubiKey 6 preview | Exact inventory model `YubiKey 5C NFC - Enhanced PIN`, device firmware `6.x.y.alpha.n` or `6.x.y.beta.n` | RSA-2048/3072/4096, P-256, P-384, pure Ed25519 and pure ML-DSA-44/65/87; ordinary and retired slots |
+
+In the preview syntax, `x` and `y` are version octets (0 through 255), and `n`
+is a nonnegative decimal release iteration. Each component has no leading zeros
+except the value `0`. The iteration is not limited to 8 or to a single byte.
+Production firmware without the alpha/beta qualifier, `rc`/`final`, malformed
+versions, other major versions and unrecognized models have no preview profile.
+A model name containing `YubiKey 6` alone is insufficient evidence.
+
+The known preview's inventory name is retained verbatim. In
+[`get_name` in ykman 5.9.2](https://github.com/Yubico/yubikey-manager/blob/5.9.2/yubikit/support.py),
+the name builder uses `5` for this form factor on versions from 5.1 onward and
+adds `Enhanced PIN` for PIN complexity. The name therefore does not establish
+that a device runs production YubiKey 5 firmware. The exact known name plus an
+explicit alpha/beta device firmware in major version 6 selects the separate
+preview family. Names and reader labels are never matched by free substrings.
+
+The preview family policy deliberately generalizes the sampled `6.0.0.alpha.8`
+hardware results to other major-version-6 alpha/beta releases of that known
+preview identity. This is an allowed compatibility policy, not a claim that
+every release or slot/parameter combination was tested. All preview profiles
+carry `family-policy` evidence and stable `yubikey/6-preview/` ID prefixes.
+The PIV applet version does not select or substitute for the device firmware;
+missing or different `PIVVersion` does not remove the base family profile.
+
+Only the exact model / `6.0.0.alpha.8` / PIV `0.0.1` tuple adds hardware evidence,
+and only to the slots and operations recorded in the
+[qualification matrix](signing-qualification.md). Fixed named-hash operations
+use `hardware-qualification`; profiles spanning sampled message/payload lengths
+or positive PSS salts use `hardware-samples`. Other slots retain family policy
+evidence. These evidence sources do not qualify each value in an interval.
+
+The pure Ed25519 and ML-DSA profiles accept complete messages of 0 through 4096
+bytes, absent context, no prehash and no requested hash/MGF1. Signature widths
+are 64 bytes for Ed25519 and 2420/3309/4627 bytes for ML-DSA-44/65/87. The profiles
+retain the tested USB PC/SC extended-APDU path and its conservative bounds;
+they do not qualify NFC or every reader. Device randomness remains unknown.
+`Client.Sign` implements Ed25519; `MLDSASigner.Sign` implements pure ML-DSA
+with nil or `crypto.Hash(0)` options. ML-DSA key import remains unsupported.
+ML-KEM and X25519 have no signing profile: generation, import, public-key
+inspection or ECDH APIs do not establish a signing operation.
+
+The existing coarse `CapabilityReport` describes adapter operation entry points
+and has no device snapshot or per-algorithm guarantees. OTP status helpers are
+separate command-level hints; neither OTP status nor PIV GET VERSION replaces
+management/device inventory. The new family policy does not change those APIs,
+PIN/touch interaction, raw card errors, or current-private-key requirements.
 
 The following pure helpers connect existing observations and signing APIs:
 

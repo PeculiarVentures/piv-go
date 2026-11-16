@@ -19,6 +19,7 @@ const (
 	yubiKeySigningQualificationReference = "docs/signing-qualification.md"
 	qualifiedPreviewModel                = "YubiKey 5C NFC - Enhanced PIN"
 	qualifiedPreviewFirmware             = "6.0.0.alpha.8"
+	yubiKeySigningFamilyPolicyReference  = "docs/signing.md#yubikey-family-profiles"
 )
 
 // SigningCapabilities reports signing profiles from an explicit cached device
@@ -27,8 +28,9 @@ const (
 // These profiles do not establish the current private key or authorize its use.
 //
 // Non-FIPS YubiKey NEO, 4 and 5 model names with matching production firmware
-// use vendor-documented profiles. FIPS, unknown models, and preview firmware
-// require separate evidence; one exact preview tuple has a qualified subset.
+// use vendor-documented profiles. The known YubiKey 6 preview identity uses an
+// explicit alpha/beta family policy; hardware evidence remains tuple-specific.
+// FIPS, Bio, unknown models and other preview identities remain unqualified.
 // Model uses yubikit.support.get_name from ykman 5.9.2 (plus the documented
 // legacy product aliases below). Firmware is the device version and qualifier
 // from explicit management/device inventory, not PIV GET VERSION or a reader
@@ -41,19 +43,23 @@ func (a *Adapter) SigningCapabilities(device adapters.SigningDevice) adapters.Si
 		Fallback: adapters.SigningDecision{
 			Support: adapters.SigningUnknown,
 			Reason:  adapters.SigningReasonDeviceProfileUnavailable,
-			Detail:  "the exact model and device firmware have no documented or qualified signing profile",
+			Detail:  "the model and device firmware have no applicable signing family profile",
 		},
 	}
-	if device.Model == qualifiedPreviewModel && device.Firmware == qualifiedPreviewFirmware && device.PIVVersion == "0.0.1" {
-		report.Profiles = qualifiedPreviewSigningProfiles()
+	family, minor := signingDeviceFamily(device)
+	if family == signingFamilyUnknown {
+		return report
+	}
+	if family == signingFamily6Preview {
+		report.Profiles = previewSigningProfiles()
+		if device.Firmware == qualifiedPreviewFirmware && device.PIVVersion == "0.0.1" {
+			report.Profiles = qualifyPreviewSigningProfiles(report.Profiles)
+		}
 		report.Fallback.Reason = adapters.SigningReasonQualificationPending
-		report.Fallback.Detail = "this preview qualification covers only the listed algorithms, slots and parameter limits"
+		report.Fallback.Detail = "the preview family policy covers only the listed algorithms, slots and parameter limits; other operations need qualification"
 		return report
 	}
-	major, minor, valid := signingFirmwareVersion(device.Firmware)
-	if !valid || signingModelGeneration(device.Model) != major || major < 3 || major > 5 {
-		return report
-	}
+	major := int(family)
 	report.Fallback = adapters.SigningDecision{
 		Support: adapters.SigningUnsupported,
 		Reason:  adapters.SigningReasonProfileNotImplemented,
@@ -169,9 +175,42 @@ func cloneSigningDevice(device adapters.SigningDevice) adapters.SigningDevice {
 	return device
 }
 
+type signingFamily int
+
+const (
+	signingFamilyUnknown  signingFamily = 0
+	signingFamilyNEO      signingFamily = 3
+	signingFamily4        signingFamily = 4
+	signingFamily5        signingFamily = 5
+	signingFamily6Preview signingFamily = 6
+)
+
+func signingDeviceFamily(device adapters.SigningDevice) (signingFamily, int) {
+	if device.Model == qualifiedPreviewModel {
+		parts := strings.Split(device.Firmware, ".")
+		if len(parts) != 5 || (parts[3] != "alpha" && parts[3] != "beta") || !signingDecimal(parts[4]) {
+			return signingFamilyUnknown, 0
+		}
+		for _, part := range parts[:3] {
+			if !signingDecimal(part) {
+				return signingFamilyUnknown, 0
+			}
+		}
+		major, minor, valid := signingFirmwareVersion(strings.Join(parts[:3], "."))
+		if valid && major == 6 {
+			return signingFamily6Preview, minor
+		}
+		return signingFamilyUnknown, 0
+	}
+	major, minor, valid := signingFirmwareVersion(device.Firmware)
+	if valid && signingModelGeneration(device.Model) == major && major >= 3 && major <= 5 {
+		return signingFamily(major), minor
+	}
+	return signingFamilyUnknown, 0
+}
+
 // Model strings are product identities, not reader-name substring matches.
-// In particular, a FIPS or Enhanced PIN suffix does not inherit a model's
-// ordinary production capabilities without its own qualification.
+// FIPS, Bio and unknown suffixes never inherit ordinary production profiles.
 // ykman's canonical names include YubiKey 5A and the aggregate YubiKey 4.
 // NEO-n, 4 Nano/4C/4C Nano and the generic 5 are retained product aliases.
 func signingModelGeneration(model string) int {
@@ -211,9 +250,21 @@ func signingFirmwareVersion(version string) (major, minor int, valid bool) {
 	return numbers[0], numbers[1], numbers[0] != 0
 }
 
-func qualifiedPreviewSigningProfiles() []adapters.SigningProfile {
-	evidence := []adapters.SigningEvidence{{Source: "hardware-qualification", Reference: yubiKeySigningQualificationReference}}
-	prefix := "yubikey/qualified-6.0.0.alpha.8"
+func signingDecimal(value string) bool {
+	if value == "" || len(value) > 1 && value[0] == '0' {
+		return false
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func previewSigningProfiles() []adapters.SigningProfile {
+	evidence := []adapters.SigningEvidence{{Source: "family-policy", Reference: yubiKeySigningFamilyPolicyReference}}
+	prefix := "yubikey/6-preview"
 	var profiles []adapters.SigningProfile
 	slots := []piv.Slot{piv.SlotAuthentication, piv.SlotSignature, piv.SlotKeyManagement, piv.SlotCardAuth}
 	for slot := piv.Slot(0x82); slot <= 0x95; slot++ {
@@ -235,6 +286,67 @@ func qualifiedPreviewSigningProfiles() []adapters.SigningProfile {
 	} {
 		size, _ := piv.MLDSASignatureLength(variant.algorithm)
 		profiles = append(profiles, messageSigningProfile(fmt.Sprintf("%s/mldsa%d", prefix, variant.parameterSet), adapters.SigningKey{Family: adapters.SigningKeyMLDSA, MLDSAParameterSet: variant.parameterSet}, adapters.SigningMLDSA, size, slots, evidence))
+	}
+	for i := range profiles {
+		if profiles[i].Detail != "" {
+			profiles[i].Detail += "; "
+		}
+		profiles[i].Detail += "preview family policy generalizes sampled hardware results; it does not qualify every firmware, slot or parameter value"
+	}
+	return profiles
+}
+
+// Hardware provenance follows the independently inventoried hardware checks;
+// interval profiles retain sampled evidence rather than claiming every value.
+func qualifyPreviewSigningProfiles(profiles []adapters.SigningProfile) []adapters.SigningProfile {
+	for i := range len(profiles) {
+		profile := &profiles[i]
+		var tested []piv.Slot
+		source := "hardware-qualification"
+		switch profile.Key.Family {
+		case adapters.SigningKeyRSA:
+			switch profile.Key.RSABits {
+			case 2048:
+				tested = []piv.Slot{piv.SlotAuthentication}
+			case 3072:
+				tested = []piv.Slot{piv.SlotSignature}
+			case 4096:
+				tested = []piv.Slot{0x82}
+			}
+			if profile.Parameters.Scheme == adapters.SigningRSAPKCS1v15Payload || profile.SaltLength.Min != profile.SaltLength.Max {
+				source = "hardware-samples"
+			}
+		case adapters.SigningKeyEC:
+			if profile.Parameters.Hash == 0 {
+				continue
+			}
+			if profile.Key.CurveOID == adapters.SigningCurveP256 {
+				tested = []piv.Slot{piv.SlotKeyManagement, 0x95}
+			} else if profile.Key.CurveOID == adapters.SigningCurveP384 {
+				tested = []piv.Slot{piv.SlotCardAuth}
+			}
+		case adapters.SigningKeyEdDSA:
+			tested = []piv.Slot{piv.SlotAuthentication, piv.SlotSignature}
+			source = "hardware-samples"
+		case adapters.SigningKeyMLDSA:
+			tested = []piv.Slot{piv.SlotSignature}
+			source = "hardware-samples"
+		}
+		if len(tested) == 0 {
+			continue
+		}
+		var remaining []piv.Slot
+		for _, slot := range profile.Slots {
+			if !slices.Contains(tested, slot) {
+				remaining = append(remaining, slot)
+			}
+		}
+		qualified := *profile
+		qualified.ID += "/evidence-6.0.0.alpha.8"
+		qualified.Slots = tested
+		qualified.Evidence = append(slices.Clone(profile.Evidence), adapters.SigningEvidence{Source: source, Reference: yubiKeySigningQualificationReference})
+		profile.Slots = remaining
+		profiles = append(profiles, qualified)
 	}
 	return profiles
 }

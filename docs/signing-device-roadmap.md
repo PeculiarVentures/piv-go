@@ -43,7 +43,10 @@ switching the requested key/backend.
 
 The [current qualification matrix](signing-qualification.md) records the
 implemented and tested subset: explicit RSA v1.5/PSS, P-256/P-384 and pure
-Ed25519/ML-DSA-44/65/87 on the designated preview device. P-521 preparation is
+Ed25519/ML-DSA-44/65/87 on the designated preview device. The separate
+[preview family policy](signing.md#yubikey-family-profiles) makes those base
+profiles available to the known model's other valid major-version-6 alpha/beta
+firmware; it does not add hardware qualification for those releases. P-521 preparation is
 tested off-card; secp256k1 identity is distinct from P-256. Neither establishes
 native hardware support for the three algorithms above.
 
