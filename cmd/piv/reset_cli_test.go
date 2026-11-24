@@ -124,12 +124,19 @@ func TestSetupResetYubiKeyBlocksCredentialsBeforeReset(t *testing.T) {
 				return emulator.BuildSuccessResponse(nil), nil
 			})
 			targets := neoCLITargets(func() piv.Card { return card })
-			cli, _, stderr := newTestCLI(t, targets, bytes.NewReader(nil))
-			if err := executeCLI(cli, "setup", "reset", "--yes"); err != nil {
+			cli, stdout, stderr := newTestCLI(t, targets, bytes.NewReader(nil))
+			if err := executeCLI(cli, "setup", "reset", "--yes", "--trace", "off"); err != nil {
 				t.Fatalf("setup reset: %v; %s", err, stderr.String())
 			}
 			if resets != 1 || pinAttempts != initial || pukAttempts != max(initial, 1) {
 				t.Fatalf("reset=%d PIN attempts=%d PUK attempts=%d, initial=%d", resets, pinAttempts, pukAttempts, initial)
+			}
+			const success = "token reset\n\nFactory credentials restored\n" +
+				"  PIN  123456\n" +
+				"  PUK  12345678\n" +
+				"  Management key  010203040506070801020304050607080102030405060708\n"
+			if got := stderr.String(); got != success || stdout.Len() != 0 {
+				t.Fatalf("unexpected success output: stdout %q, stderr %q", stdout.String(), got)
 			}
 		})
 	}

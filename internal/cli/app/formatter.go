@@ -50,8 +50,12 @@ func (f *Formatter) WriteResponse(stdout io.Writer, stderr io.Writer, response R
 		} else {
 			_, _ = fmt.Fprintln(stderr, f.mutationSummary(result, response.Target))
 			if defaults := result.resetDefaults; defaults != nil {
-				_, _ = fmt.Fprintf(stderr, "\nFactory credentials restored\n  PIN  %s\n  PUK  %s\n  Management key (%s)  %x\n",
-					defaults.PIN, defaults.PUK, AlgorithmName(defaults.ManagementAlgorithm), defaults.ManagementKey)
+				keyLabel := "Management key"
+				if defaults.ManagementAlgorithm != 0 {
+					keyLabel += " (" + AlgorithmName(defaults.ManagementAlgorithm) + ")"
+				}
+				_, _ = fmt.Fprintf(stderr, "\nFactory credentials restored\n  PIN  %s\n  PUK  %s\n  %s  %x\n",
+					defaults.PIN, defaults.PUK, keyLabel, defaults.ManagementKey)
 			}
 		}
 	case CredentialStatus:

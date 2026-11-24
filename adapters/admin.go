@@ -115,8 +115,9 @@ type ResetDefaultsAdapter interface {
 
 // ResetDefaults holds the factory credentials restored by a token reset.
 type ResetDefaults struct {
-	PIN                 string
-	PUK                 string
+	PIN string
+	PUK string
+	// ManagementAlgorithm is zero when the default algorithm depends on the device.
 	ManagementAlgorithm byte
 	ManagementKey       []byte
 }
