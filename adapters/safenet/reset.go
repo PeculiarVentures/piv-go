@@ -62,6 +62,13 @@ func (a *Adapter) ResetToken(session *adapters.Session, params adapters.ResetTok
 	if err != nil {
 		return err
 	}
+	// SafeNet cards can omit the Card Authentication containers from DF35 and DF34.
+	// Use the same direct writes as a slot reset and require them to succeed.
+	session.Observe(adapters.LogLevelDebug, a, "reset-token", "clearing the Card Authentication slot")
+	if err := a.resetSlot(session.Client, piv.SlotCardAuth); err != nil {
+		return err
+	}
+
 	session.Observe(adapters.LogLevelDebug, a, "reset-token", "clearing vendor containers")
 	if err := a.clearContainers(session, structure, nil); err != nil {
 		return err

@@ -661,7 +661,7 @@ func TestResetSlotClearsSafeNetObjects(t *testing.T) {
 	}
 }
 
-func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing.T) {
+func newResetTokenTestSession() (*emulator.Card, *adapters.Session) {
 	challenge := []byte{0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF}
 	challengeResp := iso7816.EncodeTLV(0x7C, iso7816.EncodeTLV(0x81, challenge))
 
@@ -701,6 +701,11 @@ func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing
 		ManagementAlgorithm: piv.AlgAES128,
 		ManagementKey:       []byte{0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01},
 	}
+	return mock, session
+}
+
+func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing.T) {
+	mock, session := newResetTokenTestSession()
 
 	if err := adapteradmin.ResetToken(adapters.NewRuntime(session, NewAdapter()), adapters.ResetTokenParams{PUK: defaultPUK}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -712,6 +717,16 @@ func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing
 		}
 	}
 	putData := make(map[uint][][]byte)
+	// The card's DF35 and DF34 responses omit both Card Authentication tags.
+	wantCardAuthWrites := []struct {
+		tag   uint
+		value []byte
+	}{
+		{0xFF900E, iso7816.EncodeTLV(0x7F48, nil)},
+		{0xFF900E, iso7816.EncodeTLV(0x7F49, nil)},
+		{0xFFF301, iso7816.EncodeTLV(0x53, nil)},
+	}
+	putDataCount := 0
 	for _, command := range mock.TransmittedCommands {
 		if len(command) < 9 || command[1] != 0xDB {
 			continue
@@ -720,12 +735,19 @@ func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing
 		if err != nil {
 			t.Fatalf("decode PUT DATA command: %v", err)
 		}
+		if putDataCount < len(wantCardAuthWrites) {
+			want := wantCardAuthWrites[putDataCount]
+			if tag != want.tag || !bytes.Equal(value, want.value) {
+				t.Fatalf("PUT DATA %d = %06X/%X, want %06X/%X", putDataCount+1, tag, value, want.tag, want.value)
+			}
+		}
+		putDataCount++
 		putData[tag] = append(putData[tag], value)
 	}
 
-	wantDBCommands := 6 + len(piv.KnownObjects()) + 1
-	if got := len(flattenPutData(putData)); got != wantDBCommands {
-		t.Fatalf("expected %d PUT DATA commands, got %d", wantDBCommands, got)
+	wantDBCommands := len(wantCardAuthWrites) + 6 + len(piv.KnownObjects()) + 1
+	if putDataCount != wantDBCommands {
+		t.Fatalf("expected %d PUT DATA commands, got %d", wantDBCommands, putDataCount)
 	}
 
 	if got := putData[0xFFF305]; len(got) != 1 || !bytes.Equal(got[0], iso7816.EncodeTLV(0x53, nil)) {
@@ -736,6 +758,9 @@ func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing
 	}
 	if got := putData[piv.ObjectCHUID]; len(got) != 1 || !bytes.Equal(got[0], iso7816.EncodeTLV(0x53, nil)) {
 		t.Fatalf("expected CHUID to be cleared, got %X", got)
+	}
+	if got := putData[piv.ObjectCertCardAuth]; len(got) != 1 || !bytes.Equal(got[0], iso7816.EncodeTLV(0x53, nil)) {
+		t.Fatalf("expected the Card Authentication certificate to be cleared, got %X", got)
 	}
 	if got := putData[0xFF840B]; len(got) != 1 || !bytes.Equal(got[0], buildManagementKeyObject(piv.AlgAES128, defaultManagementKey)) {
 		t.Fatalf("expected FF840B to restore default management key, got %X", got)
@@ -748,14 +773,21 @@ func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing
 	}
 }
 
-func flattenPutData(commands map[uint][][]byte) []uint {
-	flattened := make([]uint, 0)
-	for tag, values := range commands {
-		for range values {
-			flattened = append(flattened, tag)
-		}
+func TestResetTokenStopsWhenCardAuthenticationClearFails(t *testing.T) {
+	mock, session := newResetTokenTestSession()
+	mock.EnqueueResponse(0xDB, nil, iso7816.SwSuccess)
+	mock.EnqueueResponse(0xDB, nil, iso7816.SwSuccess)
+	mock.EnqueueResponse(0xDB, nil, iso7816.SwWrongData)
+
+	err := NewAdapter().ResetToken(session, adapters.ResetTokenParams{PUK: defaultPUK})
+	if !iso7816.IsStatus(err, iso7816.SwWrongData) {
+		t.Fatalf("expected reset to report the card's 6A80 error, got %v", err)
 	}
-	return flattened
+	lastCommand := mock.TransmittedCommands[len(mock.TransmittedCommands)-1]
+	tag, value, err := decodeSafeNetPutDataCommand(lastCommand)
+	if err != nil || tag != 0xFFF301 || !bytes.Equal(value, iso7816.EncodeTLV(0x53, nil)) {
+		t.Fatalf("expected reset to stop on the Card Authentication mirror write, got %X", lastCommand)
+	}
 }
 
 func hasCommandPrefix(commands [][]byte, prefix []byte) bool {
