@@ -38,6 +38,12 @@ func (a *Adapter) DescribeReset(session *adapters.Session) (adapters.ResetRequir
 			Secret:      true,
 			Required:    true,
 		}},
+		Defaults: &adapters.ResetDefaults{
+			PIN:                 defaultPIN,
+			PUK:                 defaultPUK,
+			ManagementAlgorithm: defaultManagementAlgorithm,
+			ManagementKey:       append([]byte(nil), defaultManagementKey...),
+		},
 	}, nil
 }
 
@@ -96,7 +102,7 @@ func (a *Adapter) ResetToken(session *adapters.Session, params adapters.ResetTok
 	}
 
 	session.Observe(adapters.LogLevelDebug, a, "reset-token", "restoring default management key")
-	if err := a.ChangeManagementKey(session, piv.AlgAES128, defaultManagementKey); err != nil {
+	if err := a.ChangeManagementKey(session, defaultManagementAlgorithm, defaultManagementKey); err != nil {
 		return fmt.Errorf("restore default management key: %w", err)
 	}
 

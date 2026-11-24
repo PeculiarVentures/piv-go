@@ -223,6 +223,8 @@ type MutationResult struct {
 	Plan      *OperationPlan `json:"plan,omitempty"`
 	Steps     []string       `json:"steps,omitempty"`
 	Notes     []string       `json:"notes,omitempty"`
+
+	resetDefaults *adapters.ResetDefaults
 }
 
 // DoctorResult summarizes safe diagnostic checks.

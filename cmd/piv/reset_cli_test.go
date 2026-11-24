@@ -3,12 +3,67 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/PeculiarVentures/piv-go/adapters/safenet"
 	"github.com/PeculiarVentures/piv-go/emulator"
+	"github.com/PeculiarVentures/piv-go/internal/cli/app"
 	"github.com/PeculiarVentures/piv-go/iso7816"
 	"github.com/PeculiarVentures/piv-go/piv"
 )
+
+func TestSetupResetSafeNetReportsRestoredFactoryCredentials(t *testing.T) {
+	t.Setenv("PIV_TEST_RESET_MGM", "112233445566778899aabbccddeeff00")
+	t.Setenv("PIV_TEST_RESET_PUK", "87654321")
+
+	const notice = "Factory credentials restored"
+	const success = "token reset\n\n" + notice + "\n" +
+		"  PIN  123456\n" +
+		"  PUK  12345678\n" +
+		"  Management key (aes128)  01020304050607080102030405060708\n"
+
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		pukStatus   uint16
+		wantError   bool
+		wantConsole bool
+	}{
+		{name: "success", pukStatus: iso7816.SwSuccess, wantConsole: true},
+		{name: "dry run", args: []string{"--dry-run"}, pukStatus: iso7816.SwSuccess},
+		{name: "failure", pukStatus: iso7816.SwWrongData, wantError: true},
+		{name: "json", args: []string{"--json"}, pukStatus: iso7816.SwSuccess},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			card := safenet.NewInitializationEmulatorCard()
+			card.SetResponse(0x24, nil, tc.pukStatus)
+			targets := app.NewTargetResolver(fakeCardContextFactory{
+				builders: map[string]func() piv.Card{
+					"SafeNet eToken Fusion": func() piv.Card { return card },
+				},
+			}, nil, bytes.NewReader(nil), &bytes.Buffer{})
+			cli, stdout, stderr := newTestCLI(t, targets, bytes.NewReader(nil))
+
+			args := []string{"setup", "reset", "--yes", "--trace", "off",
+				"--mgm-env", "PIV_TEST_RESET_MGM", "--puk-env", "PIV_TEST_RESET_PUK"}
+			err := executeCLI(cli, append(args, tc.args...)...)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("setup reset: %v; stderr: %s", err, stderr.String())
+			}
+			if tc.wantConsole {
+				if got := stderr.String(); got != success || stdout.Len() != 0 {
+					t.Fatalf("unexpected success output: stdout %q, stderr %q", stdout.String(), got)
+				}
+				return
+			}
+			output := stdout.String() + stderr.String()
+			if strings.Contains(output, notice) || strings.Contains(output, "01020304050607080102030405060708") {
+				t.Fatalf("unexpected factory credentials in output: %s", output)
+			}
+		})
+	}
+}
 
 // Exercise the actual CLI dispatch, including NEO's lack of GET METADATA.
 // A bare RESET is refused until both retry counters have reached zero.

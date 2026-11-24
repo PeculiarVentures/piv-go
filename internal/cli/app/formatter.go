@@ -49,6 +49,10 @@ func (f *Formatter) WriteResponse(stdout io.Writer, stderr io.Writer, response R
 			f.renderPlan(stdout, *result.Plan)
 		} else {
 			_, _ = fmt.Fprintln(stderr, f.mutationSummary(result, response.Target))
+			if defaults := result.resetDefaults; defaults != nil {
+				_, _ = fmt.Fprintf(stderr, "\nFactory credentials restored\n  PIN  %s\n  PUK  %s\n  Management key (%s)  %x\n",
+					defaults.PIN, defaults.PUK, AlgorithmName(defaults.ManagementAlgorithm), defaults.ManagementKey)
+			}
 		}
 	case CredentialStatus:
 		f.renderCredentialStatus(stdout, response.Command, result)

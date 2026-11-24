@@ -100,12 +100,22 @@ type ResetAdapter interface {
 	TokenResetAdapter
 }
 
-// ResetRequirements describes the policy requirements for a token reset flow.
+// ResetRequirements describes the inputs and effects of a token reset flow.
 type ResetRequirements struct {
 	// RequiresPUK reports whether the reset flow requires a PUK value.
 	RequiresPUK bool
 	// Fields describes the credential inputs required by the reset flow.
 	Fields []InitializationField
+	// Defaults describes the factory credentials installed by a successful reset, if known.
+	Defaults *ResetDefaults
+}
+
+// ResetDefaults holds the factory credentials restored by a token reset.
+type ResetDefaults struct {
+	PIN                 string
+	PUK                 string
+	ManagementAlgorithm byte
+	ManagementKey       []byte
 }
 
 // ResetTokenParams carries token reset input values.
