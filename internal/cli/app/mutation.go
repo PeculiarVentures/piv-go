@@ -1102,11 +1102,12 @@ func (s *MutationService) SetupReset(ctx context.Context, request SetupResetRequ
 	if err := adaptersadmin.ResetToken(target.Runtime, params); err != nil {
 		return Response{}, err
 	}
-	response = Response{
-		Command: "setup-reset",
-		Target:  target.Summary,
-		Result:  MutationResult{Action: "setup-reset", Changed: true, resetDefaults: requirements.Defaults},
+	result := MutationResult{Action: "setup-reset", Changed: true}
+	if provider, ok := target.Runtime.Adapter.(adapters.ResetDefaultsAdapter); ok {
+		defaults := provider.ResetDefaults()
+		result.resetDefaults = &defaults
 	}
+	response = Response{Command: "setup-reset", Target: target.Summary, Result: result}
 	response.traceLines = target.TraceLines()
 	return response, nil
 }

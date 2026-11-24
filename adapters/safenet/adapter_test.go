@@ -698,6 +698,7 @@ func newResetTokenTestSession() (*emulator.Card, *adapters.Session) {
 
 	session := &adapters.Session{
 		Client:              piv.NewClient(mock),
+		ReaderName:          "SafeNet eToken Fusion",
 		ManagementAlgorithm: piv.AlgAES128,
 		ManagementKey:       []byte{0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01},
 	}
@@ -775,6 +776,7 @@ func TestResetTokenClearsVendorObjectsAndRestoresDefaultManagementKey(t *testing
 
 func TestResetTokenStopsWhenCardAuthenticationClearFails(t *testing.T) {
 	mock, session := newResetTokenTestSession()
+	session.ReaderName = "SAFENET eToken FuSiOn 00 00"
 	mock.EnqueueResponse(0xDB, nil, iso7816.SwSuccess)
 	mock.EnqueueResponse(0xDB, nil, iso7816.SwSuccess)
 	mock.EnqueueResponse(0xDB, nil, iso7816.SwWrongData)
@@ -787,6 +789,43 @@ func TestResetTokenStopsWhenCardAuthenticationClearFails(t *testing.T) {
 	tag, value, err := decodeSafeNetPutDataCommand(lastCommand)
 	if err != nil || tag != 0xFFF301 || !bytes.Equal(value, iso7816.EncodeTLV(0x53, nil)) {
 		t.Fatalf("expected reset to stop on the Card Authentication mirror write, got %X", lastCommand)
+	}
+}
+
+func TestResetTokenRejectsOverlongPUKBeforeCardAccess(t *testing.T) {
+	mock, session := newResetTokenTestSession()
+
+	err := NewAdapter().ResetToken(session, adapters.ResetTokenParams{PUK: "123456789"})
+	if err == nil {
+		t.Fatal("expected reset to reject an overlong PUK")
+	}
+	if len(mock.TransmittedCommands) != 0 {
+		t.Fatalf("invalid PUK triggered %d card commands", len(mock.TransmittedCommands))
+	}
+}
+
+func TestResetTokenSkipsDirectCardAuthenticationWritesOnOtherReaders(t *testing.T) {
+	for _, readerName := range []string{"SafeNet eToken 5110", "ACS ACR122U PICC Interface", "SafeNet eToken Fusionary"} {
+		t.Run(readerName, func(t *testing.T) {
+			mock, session := newResetTokenTestSession()
+			session.ReaderName = readerName
+
+			if err := NewAdapter().ResetToken(session, adapters.ResetTokenParams{PUK: defaultPUK}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, command := range mock.TransmittedCommands {
+				if !isPutDataCommand(command) {
+					continue
+				}
+				tag, _, err := decodeSafeNetPutDataCommand(command)
+				if err != nil {
+					t.Fatalf("decode PUT DATA command: %v", err)
+				}
+				if tag == 0xFF900E || tag == 0xFFF301 {
+					t.Fatalf("unexpected Card Authentication vendor object write: %06X", tag)
+				}
+			}
+		})
 	}
 }
 
