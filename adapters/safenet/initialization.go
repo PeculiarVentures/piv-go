@@ -158,11 +158,26 @@ func (a *Adapter) determineTokenStructure(session *adapters.Session) (safeNetTok
 }
 
 func (a *Adapter) clearContainers(session *adapters.Session, structure safeNetTokenStructure, result *adapters.InitializationResult) error {
-	return a.clearContainersInternal(session, structure, func(tag uint, suffix uint) {
+	record := func(tag uint, suffix uint) {
 		if result != nil {
 			result.ContainersCleared = append(result.ContainersCleared, fmt.Sprintf("%06X/%02X", tag, suffix))
 		}
-	})
+	}
+
+	readerName := " " + strings.Join(strings.Fields(strings.ToLower(session.ReaderName)), " ") + " "
+	if strings.Contains(readerName, " etoken fusion ") || strings.Contains(readerName, " safenet fusion ") {
+		// Fusion cards can omit the Card Authentication containers from DF35 and DF34.
+		session.Observe(adapters.LogLevelDebug, a, "clear-containers", "clearing the Card Authentication slot")
+		if err := a.resetSlot(session.Client, piv.SlotCardAuth); err != nil {
+			return err
+		}
+		generationTag := safeNetGenerationTagsBySlot[piv.SlotCardAuth]
+		record(generationTag, 0x7F48)
+		record(generationTag, 0x7F49)
+		record(safeNetCardAuthMirrorTag, 0x53)
+	}
+
+	return a.clearContainersInternal(session, structure, record)
 }
 
 func (a *Adapter) clearContainersInternal(session *adapters.Session, structure safeNetTokenStructure, record func(tag uint, suffix uint)) error {
