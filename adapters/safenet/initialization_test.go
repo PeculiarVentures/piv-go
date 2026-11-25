@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -114,13 +115,35 @@ func TestInitializeTokenWithEmulatorSessionProducesTraceAlignedAPDULog(t *testin
 	if !result.ManagementAuthenticated {
 		t.Fatal("expected management authentication to succeed")
 	}
-	if len(result.ContainersCleared) == 0 {
-		t.Fatal("expected cleared containers to be reported")
+	wantCardAuthContainers := []string{"FF900E/7F48", "FF900E/7F49", "FFF301/53"}
+	if len(result.ContainersCleared) < len(wantCardAuthContainers) ||
+		!slices.Equal(result.ContainersCleared[:len(wantCardAuthContainers)], wantCardAuthContainers) {
+		t.Fatalf("cleared containers = %v, want prefix %v", result.ContainersCleared, wantCardAuthContainers)
 	}
-	if len(result.APDULog) == 0 {
-		t.Fatal("expected APDU log to be populated")
+
+	// The captured DF35 and DF34 responses omit the Card Authentication tags.
+	// Check the direct writes after CHUID readback and compare the rest to the capture.
+	wantCardAuthTrace := []string{
+		"APDU -> 00 DB 3F FF 08 5C 03 FF 90 0E 7F 48 00 00",
+		"APDU <- 90 00",
+		"APDU -> 00 DB 3F FF 08 5C 03 FF 90 0E 7F 49 00 00",
+		"APDU <- 90 00",
+		"APDU -> 00 DB 3F FF 07 5C 03 FF F3 01 53 00 00",
+		"APDU <- 90 00",
 	}
-	normalizedLog := testtrace.RequireMatchFile(t, "testdata/initialize_token_apdu_trace.txt", result.APDULog)
+	chuidReadBack := slices.IndexFunc(result.APDULog, func(line string) bool {
+		return emulator.NormalizeTraceLine(line) == "APDU -> 00 CB 3F FF 05 5C 03 FF F3 02 00"
+	})
+	cardAuthStart := chuidReadBack + 2
+	cardAuthEnd := cardAuthStart + len(wantCardAuthTrace)
+	if chuidReadBack < 0 || cardAuthEnd > len(result.APDULog) {
+		t.Fatal("expected CHUID readback followed by Card Authentication clearing")
+	}
+	if got := emulator.NormalizeTraceLines(result.APDULog[cardAuthStart:cardAuthEnd]); !slices.Equal(got, wantCardAuthTrace) {
+		t.Fatalf("Card Authentication trace = %v, want %v", got, wantCardAuthTrace)
+	}
+	capturedLog := slices.Concat(result.APDULog[:cardAuthStart], result.APDULog[cardAuthEnd:])
+	normalizedLog := testtrace.RequireMatchFile(t, "testdata/initialize_token_apdu_trace.txt", capturedLog)
 
 	chuidCommand := findLogLineWithPrefix(normalizedLog, "APDU -> 00 DB 3F FF 42 5C 03 FF F3 02 ")
 	if chuidCommand == "" {
@@ -207,6 +230,30 @@ func TestInitializeTokenIdentityOnlyPreservesExistingContainers(t *testing.T) {
 	}
 	if expiry := readCHUIDExpiry(t, chuid); expiry != "20360401" {
 		t.Fatalf("CHUID expiry = %q, want 20360401", expiry)
+	}
+}
+
+func TestInitializeTokenStopsWhenCardAuthenticationClearFails(t *testing.T) {
+	card := emulator.NewCard()
+	mirrorWrite := []byte{0x00, 0xDB, 0x3F, 0xFF, 0x07, 0x5C, 0x03, 0xFF, 0xF3, 0x01, 0x53, 0x00, 0x00}
+	card.RegisterPrefixHandler(mirrorWrite, func(_ *emulator.Card, _ []byte) ([]byte, error) {
+		return emulator.BuildResponse(nil, iso7816.SwWrongData), nil
+	})
+	state := safeNetInitializationEmulator{
+		generationTags: []uint{0xFF900A},
+		mirrorTags:     []uint{0xFFF305},
+		objects:        make(map[uint][]byte),
+		challenge:      safeNetEmulatorChallenge,
+	}
+	state.install(card)
+	session := &adapters.Session{Client: piv.NewClient(card), ReaderName: "SafeNet eToken Fusion"}
+
+	result, err := NewAdapter().InitializeToken(session, adapters.InitializeTokenParams{ClearContainers: true})
+	if !iso7816.IsStatus(err, iso7816.SwWrongData) || result != nil {
+		t.Fatalf("initialization = %+v, %v, want card status 6A80", result, err)
+	}
+	if lastCommand := card.TransmittedCommands[len(card.TransmittedCommands)-1]; !bytes.Equal(lastCommand, mirrorWrite) {
+		t.Fatalf("initialization stopped after %X, want Card Authentication mirror write %X", lastCommand, mirrorWrite)
 	}
 }
 

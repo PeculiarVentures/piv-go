@@ -2,7 +2,6 @@ package safenet
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
 	"github.com/PeculiarVentures/piv-go/iso7816"
@@ -75,14 +74,6 @@ func (a *Adapter) ResetToken(session *adapters.Session, params adapters.ResetTok
 	structure, err := a.determineTokenStructure(session)
 	if err != nil {
 		return err
-	}
-	readerName := " " + strings.Join(strings.Fields(strings.ToLower(session.ReaderName)), " ") + " "
-	if strings.Contains(readerName, " etoken fusion ") || strings.Contains(readerName, " safenet fusion ") {
-		// Fusion cards can omit the Card Authentication containers from DF35 and DF34.
-		session.Observe(adapters.LogLevelDebug, a, "reset-token", "clearing the Card Authentication slot")
-		if err := a.resetSlot(session.Client, piv.SlotCardAuth); err != nil {
-			return err
-		}
 	}
 
 	session.Observe(adapters.LogLevelDebug, a, "reset-token", "clearing vendor containers")
