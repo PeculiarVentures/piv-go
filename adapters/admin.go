@@ -108,6 +108,20 @@ type ResetRequirements struct {
 	Fields []InitializationField
 }
 
+// ResetDefaultsAdapter optionally reports the public factory credentials installed by a successful reset.
+type ResetDefaultsAdapter interface {
+	ResetDefaults() ResetDefaults
+}
+
+// ResetDefaults holds the factory credentials restored by a token reset.
+type ResetDefaults struct {
+	PIN string
+	PUK string
+	// ManagementAlgorithm is zero when the default algorithm depends on the device.
+	ManagementAlgorithm byte
+	ManagementKey       []byte
+}
+
 // ResetTokenParams carries token reset input values.
 type ResetTokenParams struct {
 	// PUK is the current PUK value used by tokens that require it for reset.

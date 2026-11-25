@@ -23,8 +23,9 @@ var defaultManagementKey = []byte{
 }
 
 const (
-	defaultPIN = "123456"
-	defaultPUK = "12345678"
+	defaultPIN                 = "123456"
+	defaultPUK                 = "12345678"
+	defaultManagementAlgorithm = piv.AlgAES128
 )
 
 var eccP256Parameters = []struct {

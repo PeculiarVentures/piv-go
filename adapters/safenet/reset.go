@@ -2,6 +2,7 @@ package safenet
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/PeculiarVentures/piv-go/adapters"
 	"github.com/PeculiarVentures/piv-go/iso7816"
@@ -34,11 +35,21 @@ func (a *Adapter) DescribeReset(session *adapters.Session) (adapters.ResetRequir
 		Fields: []adapters.InitializationField{{
 			Name:        "puk",
 			Label:       "PUK",
-			Description: "Current PUK required to validate and perform SafeNet token reset",
+			Description: "Current PUK used to restore the factory PIN and PUK during reset",
 			Secret:      true,
 			Required:    true,
 		}},
 	}, nil
+}
+
+// ResetDefaults returns the factory credentials restored by SafeNet token reset.
+func (a *Adapter) ResetDefaults() adapters.ResetDefaults {
+	return adapters.ResetDefaults{
+		PIN:                 defaultPIN,
+		PUK:                 defaultPUK,
+		ManagementAlgorithm: defaultManagementAlgorithm,
+		ManagementKey:       append([]byte(nil), defaultManagementKey...),
+	}
 }
 
 // ResetToken clears SafeNet vendor objects and restores the default
@@ -46,6 +57,9 @@ func (a *Adapter) DescribeReset(session *adapters.Session) (adapters.ResetRequir
 func (a *Adapter) ResetToken(session *adapters.Session, params adapters.ResetTokenParams) error {
 	if params.PUK == "" {
 		return fmt.Errorf("safenet: PUK is required for token reset")
+	}
+	if len(params.PUK) > 8 {
+		return fmt.Errorf("safenet: PUK must be 8 bytes or fewer")
 	}
 	session.Observe(adapters.LogLevelInfo, a, "reset-token", "starting SafeNet token reset")
 	if err := session.AuthenticateManagementKey(a); err != nil {
@@ -62,6 +76,15 @@ func (a *Adapter) ResetToken(session *adapters.Session, params adapters.ResetTok
 	if err != nil {
 		return err
 	}
+	readerName := " " + strings.Join(strings.Fields(strings.ToLower(session.ReaderName)), " ") + " "
+	if strings.Contains(readerName, " etoken fusion ") || strings.Contains(readerName, " safenet fusion ") {
+		// Fusion cards can omit the Card Authentication containers from DF35 and DF34.
+		session.Observe(adapters.LogLevelDebug, a, "reset-token", "clearing the Card Authentication slot")
+		if err := a.resetSlot(session.Client, piv.SlotCardAuth); err != nil {
+			return err
+		}
+	}
+
 	session.Observe(adapters.LogLevelDebug, a, "reset-token", "clearing vendor containers")
 	if err := a.clearContainers(session, structure, nil); err != nil {
 		return err
@@ -89,7 +112,7 @@ func (a *Adapter) ResetToken(session *adapters.Session, params adapters.ResetTok
 	}
 
 	session.Observe(adapters.LogLevelDebug, a, "reset-token", "restoring default management key")
-	if err := a.ChangeManagementKey(session, piv.AlgAES128, defaultManagementKey); err != nil {
+	if err := a.ChangeManagementKey(session, defaultManagementAlgorithm, defaultManagementKey); err != nil {
 		return fmt.Errorf("restore default management key: %w", err)
 	}
 

@@ -22,6 +22,16 @@ func (a *Adapter) DescribeReset(session *adapters.Session) (adapters.ResetRequir
 	return adapters.ResetRequirements{}, nil
 }
 
+// ResetDefaults returns the factory credentials restored by YubiKey PIV reset.
+func (a *Adapter) ResetDefaults() adapters.ResetDefaults {
+	// The factory key bytes are shared across YubiKeys. The algorithm depends on firmware.
+	return adapters.ResetDefaults{
+		PIN:           "123456",
+		PUK:           "12345678",
+		ManagementKey: append([]byte(nil), defaultManagementKey...),
+	}
+}
+
 // ResetToken resets the YubiKey PIV applet to factory defaults.
 func (a *Adapter) ResetToken(session *adapters.Session, params adapters.ResetTokenParams) error {
 	if err := requireSessionClient(session); err != nil {
